@@ -28,6 +28,12 @@ type fakeInstance struct {
 	signer        jose.Signer
 	nonce         string
 	idTokenClaims map[string]any // overrides for the default id_token
+
+	// Recorded by the /token and /api/v1/apps/manifest handlers for assertions.
+	tokenScope     string
+	manifestAuth   string
+	manifestBody   map[string]any
+	manifestStatus int // response status for the manifest endpoint; 0 => 200
 }
 
 func newFakeInstance(t *testing.T) *fakeInstance {
@@ -78,6 +84,7 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		if r.Form.Get("grant_type") == "client_credentials" {
+			fake.tokenScope = r.Form.Get("scope")
 			writeJSON(w, map[string]any{"access_token": "machine-token", "token_type": "Bearer"})
 			return
 		}
@@ -94,6 +101,17 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 	})
 	mux.HandleFunc("/introspect", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{"active": true, "sub": "user-1", "scope": "openid"})
+	})
+	mux.HandleFunc("/api/v1/apps/manifest", func(w http.ResponseWriter, r *http.Request) {
+		fake.manifestAuth = r.Header.Get("Authorization")
+		fake.manifestBody = map[string]any{}
+		_ = json.NewDecoder(r.Body).Decode(&fake.manifestBody)
+		if fake.manifestStatus != 0 {
+			w.WriteHeader(fake.manifestStatus)
+			writeJSON(w, map[string]any{"error": "insufficient_scope"})
+			return
+		}
+		writeJSON(w, map[string]any{"unchanged": false, "roles_declared": 1, "permissions_declared": 1})
 	})
 
 	t.Cleanup(fake.server.Close)

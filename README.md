@@ -67,6 +67,41 @@ result, _ := client.Introspect(ctx, someToken) // RFC 7662
 ok := cboxid.VerifyWebhook(rawBody, r.Header.Get("X-Cbox-Signature"), webhookSecret, 300)
 ```
 
+## Declare roles & permissions, publish a manifest
+
+Declare your app's authorization **roles** and **permissions** in code and push them to
+Cbox ID on deploy. Cbox ID owns identity and who holds what; your app owns what a role
+_means_. Assigned roles then arrive in the token's claims for you to enforce. Requires a
+`ClientSecret` and a client that holds the `apps.manifest` scope.
+
+```go
+client, _ := cboxid.New(ctx, cboxid.Config{
+    Issuer:       "https://id.acme.com",
+    ClientID:     "client_...",
+    ClientSecret: "secret_...",
+    RedirectURI:  "http://localhost", // unused when only publishing, but required
+    Permissions: []cboxid.Permission{
+        {Key: "invoices:create", Description: "Create invoices"},
+        {Key: "invoices:read", Description: "View invoices"},
+    },
+    Roles: []cboxid.Role{
+        {Key: "billing-admin", Name: "Billing Admin", Description: "Full billing access",
+            Permissions: []string{"invoices:create", "invoices:read"}},
+    },
+})
+
+// Run on deploy. Idempotent — republishing an unchanged manifest is a no-op.
+summary, err := client.PublishManifest(ctx)
+// summary.Unchanged, summary.RolesDeclared, summary.PermissionsDeclared
+```
+
+`PublishManifest` mints a client-credentials token scoped to `apps.manifest`, then POSTs
+the manifest to `{issuer}/api/v1/apps/manifest`. A rejected push wraps
+`cboxid.ErrManifestRejected`. A complete example is in
+[`examples/publish-manifest`](examples/publish-manifest). This mirrors the Laravel
+client's `php artisan cbox-id:publish-manifest`, so the manifest contract is identical
+across SDKs.
+
 ## Errors
 
 Errors wrap the sentinels `cboxid.ErrInvalidState`, `cboxid.ErrAuthentication` and

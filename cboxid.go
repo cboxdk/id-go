@@ -37,6 +37,12 @@ type Config struct {
 	AccountPath string
 	// HTTPClient, when set, is used for all back-channel calls (else http.DefaultClient).
 	HTTPClient *http.Client
+	// Permissions and Roles declare this app's authorization catalog in code, for
+	// PublishManifest to push to Cbox ID on deploy. Cbox ID owns identity and who
+	// holds what; the app owns what a role means. Leave empty if you don't publish a
+	// manifest. Requires the client to hold the apps.manifest scope.
+	Permissions []Permission
+	Roles       []Role
 }
 
 // Client is a Cbox ID client. Construct it with New and share it; it is safe for

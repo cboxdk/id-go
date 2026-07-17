@@ -11,4 +11,8 @@ var (
 	// ErrAuthentication indicates login could not be completed, or a token failed
 	// verification.
 	ErrAuthentication = errors.New("cboxid: authentication failed")
+	// ErrManifestRejected indicates Cbox ID refused an authorization-manifest push —
+	// e.g. the client lacks the apps.manifest scope, or the manifest was malformed.
+	// The wrapped message carries the HTTP status and the server's response body.
+	ErrManifestRejected = errors.New("cboxid: manifest push rejected")
 )
