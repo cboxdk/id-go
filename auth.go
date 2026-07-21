@@ -112,6 +112,22 @@ func (c *Client) Authenticate(ctx context.Context, cb Callback, stored Stored) (
 	return c.userFromToken(ctx, token, stored.Nonce)
 }
 
+// Refresh exchanges a refresh token for a fresh access token (OAuth 2.0
+// refresh_token grant). Cbox ID rotates refresh tokens and detects reuse, so ALWAYS
+// persist the returned token's RefreshToken and discard the one you passed in —
+// presenting a rotated token again revokes the entire token family.
+func (c *Client) Refresh(ctx context.Context, refreshToken string) (*oauth2.Token, error) {
+	if refreshToken == "" {
+		return nil, fmt.Errorf("%w: a refresh token is required", ErrAuthentication)
+	}
+	ctx = withClient(ctx, c.cfg.HTTPClient)
+	token, err := c.oauth.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
+	if err != nil {
+		return nil, fmt.Errorf("%w: token refresh failed: %v", ErrAuthentication, err)
+	}
+	return token, nil
+}
+
 // userFromToken verifies a token's id_token (signature + issuer + audience, and the
 // nonce when expectedNonce is non-empty), enriches it with userinfo, and builds a
 // CboxUser. Shared by the authorization-code and device flows.

@@ -284,6 +284,22 @@ func TestMachineToken(t *testing.T) {
 	}
 }
 
+func TestRefresh(t *testing.T) {
+	fake := newFakeInstance(t)
+	client := fake.client(t)
+
+	token, err := client.Refresh(context.Background(), "refresh-abc")
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if token.AccessToken != "access-abc" {
+		t.Errorf("AccessToken = %q, want access-abc", token.AccessToken)
+	}
+	if token.RefreshToken != "refresh-abc" {
+		t.Errorf("RefreshToken = %q, want refresh-abc", token.RefreshToken)
+	}
+}
+
 func TestIntrospect(t *testing.T) {
 	fake := newFakeInstance(t)
 	result, err := fake.client(t).Introspect(context.Background(), "some-token")
