@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
+	"unicode/utf16"
 )
 
 // scopeAppsManifest is the OAuth scope a client must hold to push an authorization
@@ -74,19 +76,91 @@ func (c *Client) Manifest() Manifest {
 	return body
 }
 
-// manifestVersion derives a stable content hash from the declared catalog. It mirrors
-// the PHP reference: sha256 over the JSON of {permissions, roles} (without the version
-// field), truncated to 16 hex chars.
+// manifestVersion derives a stable content hash from the declared catalog. It is
+// byte-for-byte identical to the PHP reference (Cbox\Id\AccessControl\Manifest\
+// Manifest::checksum): sha256 over the canonical JSON of {permissions, roles}
+// (without the version field), truncated to 16 hex chars. See canonicalManifestJSON.
 func manifestVersion(permissions []Permission, roles []Role) string {
-	encoded, err := json.Marshal(struct {
-		Permissions []Permission `json:"permissions"`
-		Roles       []Role       `json:"roles"`
-	}{Permissions: permissions, Roles: roles})
-	if err != nil {
+	sum := sha256.Sum256([]byte(canonicalManifestJSON(permissions, roles)))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// canonicalManifestJSON serializes {permissions, roles} exactly as the PHP reference's
+// json_encode does before hashing: object keys in insertion order, permissions and
+// roles sorted by key, each role's permission refs sorted, an absent-or-empty
+// description emitted as null, compact separators, forward slashes escaped as "\/",
+// and every non-ASCII rune escaped as "\uXXXX".
+func canonicalManifestJSON(permissions []Permission, roles []Role) string {
+	type canonPermission struct {
+		Key         string  `json:"key"`
+		Description *string `json:"description"`
+	}
+	type canonRole struct {
+		Key         string   `json:"key"`
+		Name        string   `json:"name"`
+		Description *string  `json:"description"`
+		Permissions []string `json:"permissions"`
+	}
+
+	sortedPermissions := append([]Permission(nil), permissions...)
+	sort.Slice(sortedPermissions, func(i, j int) bool { return sortedPermissions[i].Key < sortedPermissions[j].Key })
+	canonPermissions := make([]canonPermission, len(sortedPermissions))
+	for i, p := range sortedPermissions {
+		canonPermissions[i] = canonPermission{Key: p.Key, Description: emptyToNull(p.Description)}
+	}
+
+	sortedRoles := append([]Role(nil), roles...)
+	sort.Slice(sortedRoles, func(i, j int) bool { return sortedRoles[i].Key < sortedRoles[j].Key })
+	canonRoles := make([]canonRole, len(sortedRoles))
+	for i, r := range sortedRoles {
+		perms := append([]string(nil), r.Permissions...)
+		sort.Strings(perms)
+		if perms == nil {
+			perms = []string{}
+		}
+		canonRoles[i] = canonRole{Key: r.Key, Name: r.Name, Description: emptyToNull(r.Description), Permissions: perms}
+	}
+
+	canonical := struct {
+		Permissions []canonPermission `json:"permissions"`
+		Roles       []canonRole       `json:"roles"`
+	}{Permissions: canonPermissions, Roles: canonRoles}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // PHP leaves <, >, & unescaped; escapeLikePHP handles the rest.
+	if err := enc.Encode(canonical); err != nil {
 		return ""
 	}
-	sum := sha256.Sum256(encoded)
-	return hex.EncodeToString(sum[:])[:16]
+	return escapeLikePHP(bytes.TrimRight(buf.Bytes(), "\n"))
+}
+
+// emptyToNull maps an absent or empty description to a JSON null, matching PHP.
+func emptyToNull(description string) *string {
+	if description == "" {
+		return nil
+	}
+	return &description
+}
+
+// escapeLikePHP applies PHP json_encode's default "\/" slash escaping and "\uXXXX"
+// non-ASCII escaping to already-valid JSON bytes.
+func escapeLikePHP(raw []byte) string {
+	var sb strings.Builder
+	for _, r := range string(raw) {
+		switch {
+		case r == '/':
+			sb.WriteString(`\/`)
+		case r < 0x80:
+			sb.WriteRune(r)
+		case r <= 0xFFFF:
+			fmt.Fprintf(&sb, `\u%04x`, r)
+		default:
+			high, low := utf16.EncodeRune(r)
+			fmt.Fprintf(&sb, `\u%04x\u%04x`, high, low)
+		}
+	}
+	return sb.String()
 }
 
 // PublishManifest pushes this app's declared roles and permissions (Config.Roles and

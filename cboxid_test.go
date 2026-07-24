@@ -24,10 +24,11 @@ const clientID = "client-abc"
 // keypair that serves discovery + JWKS, signs genuine id_tokens, and answers the
 // token / userinfo / introspection endpoints.
 type fakeInstance struct {
-	server        *httptest.Server
-	signer        jose.Signer
-	nonce         string
-	idTokenClaims map[string]any // overrides for the default id_token
+	server          *httptest.Server
+	signer          jose.Signer
+	nonce           string
+	idTokenClaims   map[string]any // overrides for the default id_token
+	idTokenOverride string         // when set, /token returns this raw id_token verbatim
 
 	// Recorded by the /token and /api/v1/apps/manifest handlers for assertions.
 	tokenScope     string
@@ -88,12 +89,16 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 			writeJSON(w, map[string]any{"access_token": "machine-token", "token_type": "Bearer"})
 			return
 		}
+		idToken := fake.idTokenOverride
+		if idToken == "" {
+			idToken = fake.signIDToken(t, fake.idTokenClaims)
+		}
 		writeJSON(w, map[string]any{
 			"access_token":  "access-abc",
 			"refresh_token": "refresh-abc",
 			"token_type":    "Bearer",
 			"expires_in":    3600,
-			"id_token":      fake.signIDToken(t, fake.idTokenClaims),
+			"id_token":      idToken,
 		})
 	})
 	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, _ *http.Request) {
