@@ -8,8 +8,8 @@ Turnkey [Cbox ID](https://github.com/cboxdk/laravel-id) client for Go, built for
 browser on any device while your program polls.
 
 It also supports the standard authorization-code + PKCE flow for server apps, plus
-machine tokens, UserInfo, RFC 7662 introspection and webhook verification. The
-id_token and OIDC plumbing are handled by the vetted
+machine tokens, UserInfo, RFC 7662 introspection, RFC 7009 revocation and webhook
+verification. The id_token and OIDC plumbing are handled by the vetted
 [`go-oidc`](https://github.com/coreos/go-oidc) and
 [`x/oauth2`](https://pkg.go.dev/golang.org/x/oauth2) — no hand-rolled crypto.
 
@@ -63,7 +63,11 @@ user, err := client.Authenticate(ctx,
 token, _ := client.MachineToken(ctx, cboxid.MachineTokenParams{Scopes: []string{"reports.read"}})
 claims, _ := client.UserInfo(ctx, user.AccessToken)
 result, _ := client.Introspect(ctx, someToken) // RFC 7662
+err := client.Revoke(ctx, user.RefreshToken, cboxid.HintRefreshToken) // RFC 7009
 ```
+
+Revoking a refresh token drops the whole token family — that's what "sign out
+everywhere" needs. Both calls are confidential-client, so they require a `ClientSecret`.
 
 ## Verify webhooks
 

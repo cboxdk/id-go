@@ -30,8 +30,12 @@ type fakeInstance struct {
 	idTokenClaims   map[string]any // overrides for the default id_token
 	idTokenOverride string         // when set, /token returns this raw id_token verbatim
 
-	// Recorded by the /token and /api/v1/apps/manifest handlers for assertions.
+	// Recorded by the /token, /revoke and /api/v1/apps/manifest handlers for assertions.
 	tokenScope     string
+	revokeForm     url.Values
+	revokeAuthUser string
+	revokeAuthPass string
+	revokeCalls    int
 	manifestAuth   string
 	manifestBody   map[string]any
 	manifestStatus int // response status for the manifest endpoint; 0 => 200
@@ -65,6 +69,7 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 			"jwks_uri":                      fake.server.URL + "/jwks",
 			"userinfo_endpoint":             fake.server.URL + "/userinfo",
 			"introspection_endpoint":        fake.server.URL + "/introspect",
+			"revocation_endpoint":           fake.server.URL + "/revoke",
 			"end_session_endpoint":          fake.server.URL + "/logout",
 			"device_authorization_endpoint": fake.server.URL + "/device_authorization",
 		})
@@ -106,6 +111,14 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 	})
 	mux.HandleFunc("/introspect", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]any{"active": true, "sub": "user-1", "scope": "openid"})
+	})
+	mux.HandleFunc("/revoke", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		fake.revokeCalls++
+		fake.revokeForm = r.Form
+		fake.revokeAuthUser, fake.revokeAuthPass, _ = r.BasicAuth()
+		// RFC 7009: a successful revocation carries an empty 200 body.
+		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/api/v1/apps/manifest", func(w http.ResponseWriter, r *http.Request) {
 		fake.manifestAuth = r.Header.Get("Authorization")
@@ -313,6 +326,53 @@ func TestIntrospect(t *testing.T) {
 	}
 	if active, _ := result["active"].(bool); !active {
 		t.Errorf("expected active token, got %v", result["active"])
+	}
+}
+
+func TestRevoke(t *testing.T) {
+	fake := newFakeInstance(t)
+	if err := fake.client(t).Revoke(context.Background(), "refresh-abc", cboxid.HintRefreshToken); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if fake.revokeCalls != 1 {
+		t.Fatalf("revoke calls = %d, want 1", fake.revokeCalls)
+	}
+	if got := fake.revokeForm.Get("token"); got != "refresh-abc" {
+		t.Errorf("token = %q", got)
+	}
+	if got := fake.revokeForm.Get("token_type_hint"); got != "refresh_token" {
+		t.Errorf("token_type_hint = %q", got)
+	}
+	if fake.revokeAuthUser != clientID || fake.revokeAuthPass != "secret-xyz" {
+		t.Errorf("basic auth = %q:%q", fake.revokeAuthUser, fake.revokeAuthPass)
+	}
+}
+
+func TestRevokeOmitsAnEmptyHint(t *testing.T) {
+	fake := newFakeInstance(t)
+	if err := fake.client(t).Revoke(context.Background(), "access-abc", ""); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, ok := fake.revokeForm["token_type_hint"]; ok {
+		t.Errorf("token_type_hint was sent for an empty hint")
+	}
+}
+
+func TestRevokeRequiresAClientSecret(t *testing.T) {
+	fake := newFakeInstance(t)
+	client, err := cboxid.New(context.Background(), cboxid.Config{
+		Issuer:      fake.server.URL,
+		ClientID:    clientID,
+		RedirectURI: "https://app.test/auth/callback",
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if err := client.Revoke(context.Background(), "some-token", ""); !errors.Is(err, cboxid.ErrConfiguration) {
+		t.Fatalf("want ErrConfiguration, got %v", err)
+	}
+	if fake.revokeCalls != 0 {
+		t.Errorf("revocation endpoint was called without a secret")
 	}
 }
 

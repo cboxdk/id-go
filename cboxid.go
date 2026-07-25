@@ -2,7 +2,8 @@
 // Connect against a Cbox ID instance — so integrating is a redirect and a callback,
 // not a rewrite — and adds the conveniences a hosted-identity product needs: a
 // redirect to the instance's hosted profile page, and back-channel helpers (machine
-// tokens, userinfo, RFC 7662 introspection, webhook verification).
+// tokens, userinfo, RFC 7662 introspection, RFC 7009 revocation, webhook
+// verification).
 //
 // Login is hardened by default: PKCE (S256), a CSRF state check, a nonce, and full
 // id_token signature + issuer + audience verification against the instance's JWKS.
@@ -26,8 +27,8 @@ type Config struct {
 	Issuer string
 	// ClientID is your registered OAuth client id.
 	ClientID string
-	// ClientSecret is required for confidential apps, machine tokens and
-	// introspection. Leave empty for public clients doing only PKCE login.
+	// ClientSecret is required for confidential apps, machine tokens, introspection
+	// and revocation. Leave empty for public clients doing only PKCE login.
 	ClientSecret string
 	// RedirectURI is your callback URL, registered on the client.
 	RedirectURI string
@@ -57,6 +58,7 @@ type Client struct {
 
 type endpoints struct {
 	Introspection       string `json:"introspection_endpoint"`
+	Revocation          string `json:"revocation_endpoint"`
 	EndSession          string `json:"end_session_endpoint"`
 	DeviceAuthorization string `json:"device_authorization_endpoint"`
 }

@@ -95,3 +95,53 @@ func (c *Client) Introspect(ctx context.Context, token string) (map[string]any, 
 	}
 	return result, nil
 }
+
+// Token type hints for Revoke (RFC 7009). The hint only tells the server which store
+// to search first; it must still find the token if the hint is wrong or absent.
+const (
+	HintAccessToken  = "access_token"
+	HintRefreshToken = "refresh_token"
+)
+
+// Revoke performs RFC 7009 token revocation (confidential-client auth). Revoking a
+// refresh token also drops the whole token family, so this is what a real "sign out
+// everywhere" does.
+//
+// Per RFC 7009 the server answers 200 for an unknown or already-revoked token, so a
+// nil error means "the token is not valid any more", not "it existed". Pass
+// HintAccessToken or HintRefreshToken as tokenTypeHint, or "" for none.
+func (c *Client) Revoke(ctx context.Context, token, tokenTypeHint string) error {
+	if c.cfg.ClientSecret == "" {
+		return fmt.Errorf("%w: Revoke requires a ClientSecret", ErrConfiguration)
+	}
+	if c.endpoints.Revocation == "" {
+		return fmt.Errorf("%w: the instance does not advertise a revocation_endpoint", ErrConfiguration)
+	}
+
+	form := url.Values{"token": {token}}
+	if tokenTypeHint != "" {
+		form.Set("token_type_hint", tokenTypeHint)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoints.Revocation,
+		strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAuthentication, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(c.cfg.ClientID, c.cfg.ClientSecret)
+
+	httpClient := c.cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: revocation request failed: %v", ErrAuthentication, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("%w: revocation returned status %d", ErrAuthentication, resp.StatusCode)
+	}
+	return nil
+}
