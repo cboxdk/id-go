@@ -386,7 +386,43 @@ func TestProfileAndLogoutURLs(t *testing.T) {
 	if got := client.ProfileURL("https://app.test/home"); !strings.Contains(got, "return_to=https%3A%2F%2Fapp.test%2Fhome") {
 		t.Errorf("ProfileURL with returnTo = %q", got)
 	}
-	if got := client.LogoutURL("https://app.test"); !strings.HasPrefix(got, fake.server.URL+"/logout") {
-		t.Errorf("LogoutURL = %q", got)
+	// The OP validates post_logout_redirect_uri against the requesting client's
+	// registered allow-list, so a logout URL without client_id can never redirect —
+	// it strands the user on a bare "signed out" page.
+	got := client.LogoutURL("https://app.test")
+	if !strings.HasPrefix(got, fake.server.URL+"/logout") {
+		t.Fatalf("LogoutURL = %q", got)
 	}
+	parsed, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("LogoutURL is not a URL: %v", err)
+	}
+	if q := parsed.Query(); q.Get("client_id") != clientID {
+		t.Errorf("LogoutURL client_id = %q, want %q", q.Get("client_id"), clientID)
+	} else if q.Get("post_logout_redirect_uri") != "https://app.test" {
+		t.Errorf("LogoutURL post_logout_redirect_uri = %q", q.Get("post_logout_redirect_uri"))
+	} else if q.Get("id_token_hint") != "" {
+		t.Errorf("LogoutURL carried an unasked-for id_token_hint %q", q.Get("id_token_hint"))
+	}
+
+	if q := mustQuery(t, client.LogoutURL("")); q.Get("client_id") != clientID {
+		t.Errorf("bare LogoutURL dropped client_id: %v", q)
+	} else if q.Has("post_logout_redirect_uri") {
+		t.Errorf("bare LogoutURL invented a redirect: %v", q)
+	}
+
+	if q := mustQuery(t, client.LogoutURLWithHint("https://app.test", "header.payload.sig")); q.Get("id_token_hint") != "header.payload.sig" {
+		t.Errorf("LogoutURLWithHint id_token_hint = %q", q.Get("id_token_hint"))
+	} else if q.Get("client_id") != clientID {
+		t.Errorf("LogoutURLWithHint dropped client_id: %v", q)
+	}
+}
+
+func mustQuery(t *testing.T, raw string) url.Values {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("not a URL: %v", err)
+	}
+	return parsed.Query()
 }

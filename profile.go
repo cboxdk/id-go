@@ -18,12 +18,30 @@ func (c *Client) ProfileURL(returnTo string) string {
 }
 
 // LogoutURL is the RP-initiated logout URL, or "" when the instance advertises none.
+// returnTo, when non-empty, is where the OP sends the browser after signing out.
 func (c *Client) LogoutURL(returnTo string) string {
+	return c.LogoutURLWithHint(returnTo, "")
+}
+
+// LogoutURLWithHint is LogoutURL plus an id_token_hint — pass the user's id_token
+// when you still hold it, and "" otherwise.
+//
+// Both forms always send client_id, even with an empty returnTo. The OP validates
+// post_logout_redirect_uri against the registered allow-list of THAT client (OIDC
+// RP-Initiated Logout 1.0 §2); a request that names no relying party gives it no
+// list to check, so it drops the return URL and leaves the user on a bare "you are
+// signed out" page. The hint is the spec's other way to identify the client, and
+// additionally tells the OP whose session is ending.
+func (c *Client) LogoutURLWithHint(returnTo, idTokenHint string) string {
 	if c.endpoints.EndSession == "" {
 		return ""
 	}
-	if returnTo == "" {
-		return c.endpoints.EndSession
+	params := url.Values{"client_id": {c.cfg.ClientID}}
+	if returnTo != "" {
+		params.Set("post_logout_redirect_uri", returnTo)
 	}
-	return c.endpoints.EndSession + "?" + url.Values{"post_logout_redirect_uri": {returnTo}}.Encode()
+	if idTokenHint != "" {
+		params.Set("id_token_hint", idTokenHint)
+	}
+	return c.endpoints.EndSession + "?" + params.Encode()
 }
