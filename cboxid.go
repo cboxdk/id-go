@@ -107,7 +107,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 func (c *Client) accountPath() string {
 	path := c.cfg.AccountPath
 	if path == "" {
-		return "/settings"
+		// "/account", not "/settings": the latter is the organization-admin page, which
+		// redirects a non-admin to "/account" and drops return_to on the way.
+		return "/account"
 	}
 	return "/" + strings.TrimLeft(path, "/")
 }

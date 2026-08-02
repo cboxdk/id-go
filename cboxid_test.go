@@ -380,7 +380,10 @@ func TestProfileAndLogoutURLs(t *testing.T) {
 	fake := newFakeInstance(t)
 	client := fake.client(t)
 
-	if got := client.ProfileURL(""); got != fake.server.URL+"/settings" {
+	// "/account", not "/settings": the latter is the organization-admin page, which
+	// redirects a non-admin to "/account" and drops return_to on the way — so the link
+	// worked for admins and silently lost the return path for everyone else.
+	if got := client.ProfileURL(""); got != fake.server.URL+"/account" {
 		t.Errorf("ProfileURL = %q", got)
 	}
 	if got := client.ProfileURL("https://app.test/home"); !strings.Contains(got, "return_to=https%3A%2F%2Fapp.test%2Fhome") {
