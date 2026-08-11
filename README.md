@@ -13,6 +13,50 @@ verification. The id_token and OIDC plumbing are handled by the vetted
 [`go-oidc`](https://github.com/coreos/go-oidc) and
 [`x/oauth2`](https://pkg.go.dev/golang.org/x/oauth2) — no hand-rolled crypto.
 
+## In a browser-facing service (publishable keys)
+
+Everything else here assumes a confidential client. A **publishable key** is the opposite —
+public on purpose, useful only from the origins you registered. Reading the environment's
+own sign-in configuration lets a Go template render a themed sign-in box without shipping a
+JavaScript SDK to do it:
+
+```go
+frontend, err := cboxid.NewFrontendClient("https://id.acme.com", "pk_live_…", nil)
+config, err := frontend.Config(ctx)          // endpoints, social buttons, the theme
+session, err := frontend.Session(ctx, token) // session.User is nil when nobody is signed in
+```
+
+An empty token yields an empty session rather than an error, and the key grants nothing on
+its own: the access token is the entire authority. A client secret passed there returns
+`ErrNotPublishableKey` at construction.
+
+## Migrating off an old login
+
+Cbox ID can ask your service whether an email and password it has never seen are good, and
+import that person on the yes. You write the lookup; the handler owns the signature, the
+freshness window and the constant-time compare:
+
+```go
+handler, err := cboxid.LegacyLoginHandler(secret, func(email, password string) (*cboxid.LegacyUser, error) {
+    row, err := db.FindUser(email)
+    if err != nil {
+        return nil, err // could not decide → 503
+    }
+    if row == nil || !bcrypt.Match(row.Hash, password) {
+        return nil, nil // no
+    }
+
+    return &cboxid.LegacyUser{Email: row.Email, Name: row.Name, PasswordHash: row.Hash}, nil
+})
+
+http.Handle("/cbox-legacy", handler)
+```
+
+Returning `(nil, nil)` is a wrong password. **Returning an error is different**: your store
+could not decide, and it answers 503 so Cbox ID refuses the sign-in rather than reading an
+outage as a bad credential. The secret is checked when the handler is built, so a missing
+one fails at startup rather than as a 500 that reads as an outage.
+
 ## Install
 
 > **Where do `issuer`, `clientId` and `redirectUri` come from?**
