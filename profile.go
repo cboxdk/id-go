@@ -19,12 +19,24 @@ func (c *Client) ProfileURL(returnTo string) string {
 
 // LogoutURL is the RP-initiated logout URL, or "" when the instance advertises none.
 // returnTo, when non-empty, is where the OP sends the browser after signing out.
+//
+// THIS SIGNS OUT THIS BROWSER ONLY. Without an id_token_hint the OP cannot tell which
+// End-User the request concerns — the endpoint is unauthenticated and reached by a
+// redirect, so a request carrying no proof could otherwise be forged to end anyone's
+// sessions everywhere. Cbox ID therefore ends only the calling browser's session when
+// no hint is supplied. For "sign out everywhere", use LogoutURLWithHint and pass the
+// user's id_token; see UPGRADING.md for laravel-id 1.8.0.
 func (c *Client) LogoutURL(returnTo string) string {
 	return c.LogoutURLWithHint(returnTo, "")
 }
 
 // LogoutURLWithHint is LogoutURL plus an id_token_hint — pass the user's id_token
 // when you still hold it, and "" otherwise.
+//
+// THE HINT IS WHAT MAKES SIGN-OUT GLOBAL. Cbox ID revokes every session the person
+// holds only when a hint it can verify names the subject holding the browser; without
+// one it signs out this browser and leaves their other devices alone. That is a
+// deliberate refusal rather than an omission — see the note on LogoutURL.
 //
 // Both forms always send client_id, even with an empty returnTo. The OP validates
 // post_logout_redirect_uri against the registered allow-list of THAT client (OIDC
