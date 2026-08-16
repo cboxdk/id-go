@@ -13,6 +13,8 @@ package cboxid_test
 import (
 	"encoding/json"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,4 +127,65 @@ func TestVerifyWebhookVerifiesRawBytesNotAReserializedBody(t *testing.T) {
 	}
 
 	t.Fatal("fixture is missing the unicode_and_escaped_slashes case")
+}
+
+// loadWebhookSignatureDocument returns the fixture's templates alongside its cases.
+// The templates are what every SDK builds its expectation from, and were the one field
+// no test in any of them read.
+func loadWebhookSignatureDocument(t *testing.T) (string, string, []webhookSignatureCase) {
+	t.Helper()
+
+	data, err := os.ReadFile("testdata/webhook_signature.json")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	var fixture struct {
+		SignedPayloadTemplate string                 `json:"signed_payload_template"`
+		HeaderTemplate        string                 `json:"header_template"`
+		Cases                 []webhookSignatureCase `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+
+	return fixture.SignedPayloadTemplate, fixture.HeaderTemplate, fixture.Cases
+}
+
+// TestFixturePinsTheSignedPayloadOrder states the wire format once, as a constant.
+//
+// This package verifies against its OWN copy of the fixture, as every SDK does, so a
+// copy that drifts is silent: this suite stays green against the drifted bytes while
+// every delivery from the server fails in the field. Deliberately NOT derived from the
+// file it guards — "{timestamp}.{body}" is the contract with the sender, and a copy
+// that says otherwise is wrong rather than authoritative.
+func TestFixturePinsTheSignedPayloadOrder(t *testing.T) {
+	signedPayload, header, _ := loadWebhookSignatureDocument(t)
+
+	if signedPayload != "{timestamp}.{body}" {
+		t.Errorf("signed_payload_template = %q, want %q", signedPayload, "{timestamp}.{body}")
+	}
+	if header != "t={timestamp},v1={signature}" {
+		t.Errorf("header_template = %q, want %q", header, "t={timestamp},v1={signature}")
+	}
+}
+
+// TestFixtureCasesMatchTheirTemplates proves the templates and the per-case literals are
+// the same fact stated twice, so either edited alone fails. The vector tests hash the
+// literal, so a flipped template alone used to change nothing.
+func TestFixtureCasesMatchTheirTemplates(t *testing.T) {
+	template, _, cases := loadWebhookSignatureDocument(t)
+
+	if len(cases) == 0 {
+		t.Fatal("fixture had no cases")
+	}
+
+	for _, c := range cases {
+		want := strings.ReplaceAll(template, "{timestamp}", strconv.FormatInt(c.Timestamp, 10))
+		want = strings.ReplaceAll(want, "{body}", c.Body)
+
+		if want != c.SignedPayload {
+			t.Errorf("%s: template built %q, fixture published %q", c.Name, want, c.SignedPayload)
+		}
+	}
 }
