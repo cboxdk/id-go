@@ -39,6 +39,10 @@ type fakeInstance struct {
 	manifestAuth   string
 	manifestBody   map[string]any
 	manifestStatus int // response status for the manifest endpoint; 0 => 200
+
+	// tokenHandler, when set, answers /token instead of the default success path — so a
+	// test can assert what the SDK makes of an RFC 6749 §5.2 error body and its headers.
+	tokenHandler http.HandlerFunc
 }
 
 func newFakeInstance(t *testing.T) *fakeInstance {
@@ -88,6 +92,11 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 		writeJSON(w, jose.JSONWebKeySet{Keys: []jose.JSONWebKey{jwk}})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		if fake.tokenHandler != nil {
+			fake.tokenHandler(w, r)
+			return
+		}
+
 		_ = r.ParseForm()
 		if r.Form.Get("grant_type") == "client_credentials" {
 			fake.tokenScope = r.Form.Get("scope")
@@ -447,4 +456,88 @@ func mustQuery(t *testing.T, raw string) url.Values {
 		t.Fatalf("not a URL: %v", err)
 	}
 	return parsed.Query()
+}
+
+// TestRefreshCarriesTheOAuthErrorAndRetryAfter proves the server's own answer survives.
+//
+// x/oauth2 already parses the RFC 6749 §5.2 body; this package was flattening all of it
+// into %v, so a caller had one prose string for outcomes that demand opposite responses.
+// invalid_grant means the session is over and the person must sign in again; a 429 means
+// the same request succeeds unchanged if you wait, and the server says how long.
+func TestRefreshCarriesTheOAuthErrorAndRetryAfter(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		status      int
+		body        string
+		header      string
+		wantCode    string
+		wantRetry   int
+		wantLimited bool
+	}{
+		{
+			name:     "invalid_grant",
+			status:   http.StatusBadRequest,
+			body:     `{"error":"invalid_grant","error_description":"Refresh token was revoked."}`,
+			wantCode: "invalid_grant",
+		},
+		{
+			name:        "rate limited with seconds",
+			status:      http.StatusTooManyRequests,
+			body:        `{"error":"temporarily_unavailable"}`,
+			header:      "42",
+			wantCode:    "temporarily_unavailable",
+			wantRetry:   42,
+			wantLimited: true,
+		},
+		{
+			// Legal per RFC 9110 and deliberately not parsed: guessing at clock skew is
+			// worse than saying nothing, and RateLimited() still says back off.
+			name:        "rate limited with an HTTP-date",
+			status:      http.StatusTooManyRequests,
+			body:        `{"error":"temporarily_unavailable"}`,
+			header:      "Wed, 21 Oct 2026 07:28:00 GMT",
+			wantCode:    "temporarily_unavailable",
+			wantRetry:   0,
+			wantLimited: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeInstance(t)
+			fake.tokenHandler = func(w http.ResponseWriter, _ *http.Request) {
+				if tc.header != "" {
+					w.Header().Set("Retry-After", tc.header)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}
+
+			client := fake.client(t)
+
+			_, err := client.Refresh(context.Background(), "spent-token")
+			if err == nil {
+				t.Fatal("want an error")
+			}
+
+			// The sentinel still matches — existing callers are untouched.
+			if !errors.Is(err, cboxid.ErrAuthentication) {
+				t.Errorf("errors.Is(ErrAuthentication) = false, want true")
+			}
+
+			var oauthErr *cboxid.OAuthError
+			if !errors.As(err, &oauthErr) {
+				t.Fatalf("errors.As(*OAuthError) = false for %v", err)
+			}
+
+			if oauthErr.Code != tc.wantCode {
+				t.Errorf("Code = %q, want %q", oauthErr.Code, tc.wantCode)
+			}
+			if oauthErr.RetryAfter != tc.wantRetry {
+				t.Errorf("RetryAfter = %d, want %d", oauthErr.RetryAfter, tc.wantRetry)
+			}
+			if oauthErr.RateLimited() != tc.wantLimited {
+				t.Errorf("RateLimited() = %v, want %v", oauthErr.RateLimited(), tc.wantLimited)
+			}
+		})
+	}
 }

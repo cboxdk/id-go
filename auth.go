@@ -106,7 +106,7 @@ func (c *Client) Authenticate(ctx context.Context, cb Callback, stored Stored) (
 
 	token, err := c.oauth.Exchange(ctx, cb.Code, oauth2.VerifierOption(stored.CodeVerifier))
 	if err != nil {
-		return nil, fmt.Errorf("%w: token exchange failed: %v", ErrAuthentication, err)
+		return nil, asOAuthError("token exchange", err)
 	}
 
 	return c.userFromToken(ctx, token, stored.Nonce)
@@ -123,7 +123,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (*oauth2.Toke
 	ctx = withClient(ctx, c.cfg.HTTPClient)
 	token, err := c.oauth.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
 	if err != nil {
-		return nil, fmt.Errorf("%w: token refresh failed: %v", ErrAuthentication, err)
+		return nil, asOAuthError("token refresh", err)
 	}
 	return token, nil
 }

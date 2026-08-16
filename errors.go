@@ -1,6 +1,14 @@
 package cboxid
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"golang.org/x/oauth2"
+)
 
 var (
 	// ErrConfiguration indicates a missing or invalid configuration value.
@@ -25,3 +33,70 @@ var (
 	// ErrServer indicates Cbox ID answered, with something unusable.
 	ErrServer = errors.New("cboxid: unusable response from Cbox ID")
 )
+
+// OAuthError is a token-endpoint failure with the server's own answer preserved.
+//
+// It wraps ErrAuthentication, so every existing errors.Is(err, ErrAuthentication) check
+// keeps working; what it adds is the detail those checks could not reach. The
+// golang.org/x/oauth2 library already parses the RFC 6749 §5.2 body into a
+// *oauth2.RetrieveError, and this package was flattening all of it into %v — so a caller
+// had one prose string for outcomes that demand opposite responses. invalid_grant on a
+// refresh means the session is over and the person must sign in again; a 429 means the
+// same request succeeds unchanged if you wait, and the server says how long.
+type OAuthError struct {
+	// Op is what was being attempted, e.g. "token refresh".
+	Op string
+	// Code is the RFC 6749 §5.2 error code, empty when the server sent none.
+	Code string
+	// Description is the server's error_description, verbatim. Not end-user copy.
+	Description string
+	// Status is the HTTP status, for the cases where the body says nothing useful.
+	Status int
+	// RetryAfter is seconds off the Retry-After header, 0 when absent or not an
+	// integer. The HTTP-date form is legal per RFC 9110 and deliberately not parsed:
+	// guessing at clock skew is worse than saying nothing, and RateLimited() still
+	// tells the caller to back off.
+	RetryAfter int
+}
+
+func (e *OAuthError) Error() string {
+	detail := e.Code
+	if detail == "" {
+		detail = fmt.Sprintf("HTTP %d", e.Status)
+	}
+
+	return fmt.Sprintf("%s: %s: %s", ErrAuthentication, e.Op, detail)
+}
+
+// Unwrap keeps errors.Is(err, ErrAuthentication) true.
+func (e *OAuthError) Unwrap() error { return ErrAuthentication }
+
+// RateLimited reports whether waiting RetryAfter seconds and repeating the same request
+// unchanged is worth it. It is the one back-channel failure where it is.
+func (e *OAuthError) RateLimited() bool { return e.Status == http.StatusTooManyRequests }
+
+// asOAuthError converts an x/oauth2 failure into an OAuthError, keeping whatever the
+// server said. Any other error is wrapped unchanged — inventing a code would make
+// errors.As succeed on a transport failure that never reached the server.
+func asOAuthError(op string, err error) error {
+	var retrieve *oauth2.RetrieveError
+	if !errors.As(err, &retrieve) {
+		return fmt.Errorf("%w: %s: %v", ErrAuthentication, op, err)
+	}
+
+	out := &OAuthError{
+		Op:          op,
+		Code:        retrieve.ErrorCode,
+		Description: retrieve.ErrorDescription,
+	}
+
+	if retrieve.Response != nil {
+		out.Status = retrieve.Response.StatusCode
+
+		if seconds, convErr := strconv.Atoi(strings.TrimSpace(retrieve.Response.Header.Get("Retry-After"))); convErr == nil && seconds >= 0 {
+			out.RetryAfter = seconds
+		}
+	}
+
+	return out
+}
