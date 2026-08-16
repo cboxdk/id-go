@@ -358,7 +358,18 @@ func TestRevokeOmitsAnEmptyHint(t *testing.T) {
 	}
 }
 
-func TestRevokeRequiresAClientSecret(t *testing.T) {
+// The clients that most need revocation were the ones that could not call it.
+//
+// A PKCE native or CLI app authenticates with "none" and holds no secret — and it is
+// exactly the case where a refresh token sits on a device somebody has just signed out
+// of. Revoke refused before reaching the network, so every such sign-out left the token
+// valid for its whole lifetime.
+//
+// The server opened this on 2026-08-12 and advertises "none" among its revocation auth
+// methods. The assertion this replaces described the world before that. RFC 7009 §2.1
+// scopes a revocation to the calling client, so the only capability is destroying a token
+// you already hold.
+func TestRevokeWorksForAPublicClient(t *testing.T) {
 	fake := newFakeInstance(t)
 	client, err := cboxid.New(context.Background(), cboxid.Config{
 		Issuer:      fake.server.URL,
@@ -368,11 +379,19 @@ func TestRevokeRequiresAClientSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-	if err := client.Revoke(context.Background(), "some-token", ""); !errors.Is(err, cboxid.ErrConfiguration) {
-		t.Fatalf("want ErrConfiguration, got %v", err)
+	if err := client.Revoke(context.Background(), "some-token", ""); err != nil {
+		t.Fatalf("public-client revoke: %v", err)
 	}
-	if fake.revokeCalls != 0 {
-		t.Errorf("revocation endpoint was called without a secret")
+	if fake.revokeCalls != 1 {
+		t.Fatalf("revocation calls = %d, want 1", fake.revokeCalls)
+	}
+	if got := fake.revokeForm.Get("client_id"); got != clientID {
+		t.Errorf("client_id in body = %q, want %q", got, clientID)
+	}
+	// No secret to build one from, and an empty Basic header would authenticate as a
+	// confidential client with a blank password — which the server must refuse.
+	if fake.revokeAuthUser != "" || fake.revokeAuthPass != "" {
+		t.Errorf("a public client sent Basic auth: %q / %q", fake.revokeAuthUser, fake.revokeAuthPass)
 	}
 }
 

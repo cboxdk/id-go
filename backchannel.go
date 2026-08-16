@@ -103,22 +103,27 @@ const (
 	HintRefreshToken = "refresh_token"
 )
 
-// Revoke performs RFC 7009 token revocation (confidential-client auth). Revoking a
-// refresh token also drops the whole token family, so this is what a real "sign out
-// everywhere" does.
+// Revoke performs RFC 7009 token revocation. Revoking a refresh token also drops the
+// whole token family, so this is what a real "sign out everywhere" does.
+//
+// PUBLIC CLIENTS TOO. This refused without a ClientSecret, so the clients that most need
+// it could not call it: a PKCE native or CLI app authenticates with "none", holds no
+// secret, and is exactly the case where a refresh token sits on a device somebody has
+// just signed out of. Cbox ID's revocation endpoint accepts a public client and
+// advertises "none" among its revocation auth methods; RFC 7009 §2.1 scopes each
+// revocation to the calling client, so the only capability is destroying a token you are
+// already holding. A confidential client still sends Basic; a public one names itself in
+// the body.
 //
 // Per RFC 7009 the server answers 200 for an unknown or already-revoked token, so a
 // nil error means "the token is not valid any more", not "it existed". Pass
 // HintAccessToken or HintRefreshToken as tokenTypeHint, or "" for none.
 func (c *Client) Revoke(ctx context.Context, token, tokenTypeHint string) error {
-	if c.cfg.ClientSecret == "" {
-		return fmt.Errorf("%w: Revoke requires a ClientSecret", ErrConfiguration)
-	}
 	if c.endpoints.Revocation == "" {
 		return fmt.Errorf("%w: the instance does not advertise a revocation_endpoint", ErrConfiguration)
 	}
 
-	form := url.Values{"token": {token}}
+	form := url.Values{"token": {token}, "client_id": {c.cfg.ClientID}}
 	if tokenTypeHint != "" {
 		form.Set("token_type_hint", tokenTypeHint)
 	}
@@ -129,7 +134,9 @@ func (c *Client) Revoke(ctx context.Context, token, tokenTypeHint string) error 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	req.SetBasicAuth(c.cfg.ClientID, c.cfg.ClientSecret)
+	if c.cfg.ClientSecret != "" {
+		req.SetBasicAuth(c.cfg.ClientID, c.cfg.ClientSecret)
+	}
 
 	httpClient := c.cfg.HTTPClient
 	if httpClient == nil {
