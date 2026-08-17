@@ -132,7 +132,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (*oauth2.Toke
 // nonce when expectedNonce is non-empty), enriches it with userinfo, and builds a
 // CboxUser. Shared by the authorization-code and device flows.
 func (c *Client) userFromToken(ctx context.Context, token *oauth2.Token, expectedNonce string) (*CboxUser, error) {
-	claims := map[string]any{}
+	verified := map[string]any{}
 	rawIDToken, _ := token.Extra("id_token").(string)
 	if rawIDToken != "" {
 		idToken, err := c.verifier.Verify(ctx, rawIDToken)
@@ -142,12 +142,35 @@ func (c *Client) userFromToken(ctx context.Context, token *oauth2.Token, expecte
 		if expectedNonce != "" && idToken.Nonce != expectedNonce {
 			return nil, fmt.Errorf("%w: id_token nonce did not match — possible replay", ErrAuthentication)
 		}
-		_ = idToken.Claims(&claims)
+		_ = idToken.Claims(&verified)
 	}
 
 	// Enrich with userinfo (email/name/org a minimal id_token may omit).
+	profile := map[string]any{}
 	if info, err := c.provider.UserInfo(ctx, oauth2.StaticTokenSource(token)); err == nil {
-		_ = info.Claims(&claims)
+		_ = info.Claims(&profile)
+	}
+
+	// OIDC Core §5.3.2: the UserInfo `sub` MUST match the id_token's, and when it does
+	// not the response MUST NOT be used. UserInfo is fetched with a bearer token and its
+	// body carries no signature of its own, so without this an IdP — or anything able to
+	// answer as one — returns {"sub": "somebody-else"} and it becomes the identity.
+	verifiedSub, hasVerified := verified["sub"].(string)
+	profileSub, hasProfile := profile["sub"].(string)
+	if hasVerified && hasProfile && subtle.ConstantTimeCompare([]byte(verifiedSub), []byte(profileSub)) != 1 {
+		return nil, fmt.Errorf("%w: the UserInfo subject does not match the verified id_token", ErrAuthentication)
+	}
+
+	// ENRICHES, NEVER REPLACES. UserInfo fills in what a minimal id_token omits and the
+	// verified claims go back on top, so the merge cannot move sub, iss, aud or anything
+	// else the signature covered. Both maps used to be decoded into one, in that order,
+	// which let the unsigned half win.
+	claims := map[string]any{}
+	for k, v := range profile {
+		claims[k] = v
+	}
+	for k, v := range verified {
+		claims[k] = v
 	}
 
 	sub, _ := claims["sub"].(string)

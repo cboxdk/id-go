@@ -43,6 +43,10 @@ type fakeInstance struct {
 	// tokenHandler, when set, answers /token instead of the default success path — so a
 	// test can assert what the SDK makes of an RFC 6749 §5.2 error body and its headers.
 	tokenHandler http.HandlerFunc
+
+	// userInfo, when set, replaces the default /userinfo body — the only way to make it
+	// disagree with the signed id_token, which is what OIDC Core §5.3.2 is about.
+	userInfo map[string]any
 }
 
 func newFakeInstance(t *testing.T) *fakeInstance {
@@ -116,6 +120,10 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 		})
 	})
 	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, _ *http.Request) {
+		if fake.userInfo != nil {
+			writeJSON(w, fake.userInfo)
+			return
+		}
 		writeJSON(w, map[string]any{"sub": "user-1", "email": "ada@acme.com", "name": "Ada", "org": "org-1"})
 	})
 	mux.HandleFunc("/introspect", func(w http.ResponseWriter, _ *http.Request) {
@@ -540,4 +548,59 @@ func TestRefreshCarriesTheOAuthErrorAndRetryAfter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestUserInfoIsBoundToTheVerifiedIDToken holds OIDC Core §5.3.2.
+//
+// UserInfo is fetched with a bearer token and its body carries no signature. Both maps
+// used to be decoded into ONE, id_token first and UserInfo second, so whatever UserInfo
+// returned won — including sub and org. The sibling PHP SDK had checked this from the
+// start, so the two SDKs disagreed about who the user is.
+func TestUserInfoIsBoundToTheVerifiedIDToken(t *testing.T) {
+	t.Run("refuses a different subject", func(t *testing.T) {
+		fake := newFakeInstance(t)
+		// The whole attack in one line: the signed token says user-1, the unsigned body
+		// says somebody else.
+		fake.userInfo = map[string]any{"sub": "victim-9", "email": "victim@acme.com"}
+		client := fake.client(t)
+
+		_, err := client.Authenticate(context.Background(),
+			cboxid.Callback{Code: "auth-code", State: "state-1"}, stored)
+
+		if err == nil {
+			t.Fatal("a UserInfo response naming another subject was accepted")
+		}
+		if !strings.Contains(err.Error(), "UserInfo subject") {
+			t.Errorf("error = %v, want the subject-mismatch refusal", err)
+		}
+	})
+
+	t.Run("enriches but never overrides a signed claim", func(t *testing.T) {
+		fake := newFakeInstance(t)
+		// org is an authorization claim: whoever sets it decides which tenant this is.
+		// It has to be IN the id_token for the precedence to be observable at all — the
+		// default fixture omits it, so UserInfo was legitimately filling a gap rather
+		// than overriding anything, and my first version of this test asserted against
+		// behaviour that was already correct.
+		fake.idTokenClaims = map[string]any{"org": "org-1"}
+		fake.userInfo = map[string]any{
+			"sub": "user-1", "email": "ada@acme.com", "name": "Ada",
+			"org": "org-admin", "title": "Engineer",
+		}
+		client := fake.client(t)
+
+		user, err := client.Authenticate(context.Background(),
+			cboxid.Callback{Code: "auth-code", State: "state-1"}, stored)
+		if err != nil {
+			t.Fatalf("authenticate: %v", err)
+		}
+
+		if user.OrganizationID != "org-1" {
+			t.Errorf("OrganizationID = %q, want the SIGNED org-1", user.OrganizationID)
+		}
+		// …and the enrichment still happens, which is why the merge exists at all.
+		if got, _ := user.Claims["title"].(string); got != "Engineer" {
+			t.Errorf("title = %q, want the UserInfo enrichment to survive", got)
+		}
+	})
 }
