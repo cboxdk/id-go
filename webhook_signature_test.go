@@ -189,3 +189,72 @@ func TestFixtureCasesMatchTheirTemplates(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyWebhookAcceptsOnlyTheWholeSignature holds the two properties hmac.Equal gives
+// for free — which is precisely why nothing asserted them, and why a rewrite could quietly
+// lose them.
+//
+// Verified across the SDKs: replacing the comparison with an 8-character prefix match left
+// every suite green, and in the one that hand-rolls its comparison (@cboxdk/id-js, which
+// cannot use a Node API in a browser) deleting the length check really does accept a valid
+// signature with anything appended.
+func TestVerifyWebhookAcceptsOnlyTheWholeSignature(t *testing.T) {
+	cases := loadWebhookSignatureFixture(t)
+	if len(cases) == 0 {
+		t.Fatal("fixture had no cases")
+	}
+
+	var envelope webhookSignatureCase
+	for _, c := range cases {
+		if c.Name == "envelope" {
+			envelope = c
+		}
+	}
+	if envelope.Name == "" {
+		t.Fatal("the envelope case is missing from the fixture")
+	}
+
+	tolerance := toleranceFor(envelope.Timestamp)
+	stamp := strconv.FormatInt(envelope.Timestamp, 10)
+
+	for _, tc := range []struct {
+		name   string
+		header string
+	}{
+		{
+			// Every character present is correct — there are just fewer of them. This is
+			// exactly what a prefix comparison accepts and a full one refuses.
+			name:   "truncated to a valid prefix",
+			header: "t=" + stamp + ",v1=" + envelope.Signature[:32],
+		},
+		{
+			// The digest is intact and complete; there is simply more after it.
+			name:   "valid signature with trailing characters",
+			header: envelope.Header + "00",
+		},
+		{
+			// The far end of the digest, where a comparison that stops early never looks.
+			name:   "differs only in its last character",
+			header: "t=" + stamp + ",v1=" + flipLast(envelope.Signature),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if cboxid.VerifyWebhook(envelope.Body, tc.header, envelope.Secret, tolerance) {
+				t.Errorf("a signature that is not the whole digest verified\n header: %s", tc.header)
+			}
+		})
+	}
+}
+
+func flipLast(signature string) string {
+	if signature == "" {
+		return signature
+	}
+
+	last := "0"
+	if strings.HasSuffix(signature, "0") {
+		last = "1"
+	}
+
+	return signature[:len(signature)-1] + last
+}
