@@ -44,6 +44,10 @@ type fakeInstance struct {
 	// test can assert what the SDK makes of an RFC 6749 §5.2 error body and its headers.
 	tokenHandler http.HandlerFunc
 
+	// discoveryIssuer, when set, is what the discovery document claims as its `issuer`
+	// instead of this server's own URL — the only way to observe RFC 8414 §3.3 pinning.
+	discoveryIssuer string
+
 	// userInfo, when set, replaces the default /userinfo body — the only way to make it
 	// disagree with the signed id_token, which is what OIDC Core §5.3.2 is about.
 	userInfo map[string]any
@@ -70,8 +74,12 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 	fake.server = httptest.NewServer(mux)
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		issuer := fake.discoveryIssuer
+		if issuer == "" {
+			issuer = fake.server.URL
+		}
 		writeJSON(w, map[string]any{
-			"issuer":                        fake.server.URL,
+			"issuer":                        issuer,
 			"authorization_endpoint":        fake.server.URL + "/authorize",
 			"token_endpoint":                fake.server.URL + "/token",
 			"jwks_uri":                      fake.server.URL + "/jwks",

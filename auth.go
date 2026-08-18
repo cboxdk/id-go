@@ -125,6 +125,18 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (*oauth2.Toke
 	if err != nil {
 		return nil, asOAuthError("token refresh", err)
 	}
+
+	// VERIFIED BEFORE IT IS HANDED BACK. A caller that refreshes its session claims from
+	// this token's id_token verified only the one it received at login; this one arrives
+	// later, on a channel it never checks, and could be forged, expired, or for another
+	// audience. The nonce is deliberately not re-checked — OIDC Core §12.2 says a
+	// refreshed id_token need not carry one.
+	if rawIDToken, ok := token.Extra("id_token").(string); ok && rawIDToken != "" {
+		if _, err := c.verifier.Verify(ctx, rawIDToken); err != nil {
+			return nil, fmt.Errorf("%w: the refreshed id_token failed verification: %v", ErrAuthentication, err)
+		}
+	}
+
 	return token, nil
 }
 

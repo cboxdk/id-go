@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -75,6 +76,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.RedirectURI == "" {
 		return nil, fmt.Errorf("%w: RedirectURI is required", ErrConfiguration)
 	}
+	if err := assertSecureIssuer(cfg.Issuer); err != nil {
+		return nil, err
+	}
 
 	provider, err := oidc.NewProvider(withClient(ctx, cfg.HTTPClient), strings.TrimRight(cfg.Issuer, "/"))
 	if err != nil {
@@ -120,4 +124,33 @@ func withClient(ctx context.Context, httpClient *http.Client) context.Context {
 		return oidc.ClientContext(ctx, httpClient)
 	}
 	return ctx
+}
+
+// assertSecureIssuer refuses an issuer that is not HTTPS.
+//
+// Every request this SDK makes to the issuer carries a credential: the authorization
+// code, the PKCE verifier, the client secret, the refresh token. Over http a network
+// attacker reads all of them — and replaces the discovery document and the JWKS, after
+// which a forged id_token verifies cleanly and the verification below proves nothing.
+//
+// Loopback stays allowed: a native app's own callback listener is loopback by
+// definition (RFC 8252), and a development instance runs there.
+func assertSecureIssuer(issuer string) error {
+	parsed, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("%w: Issuer is not a valid URL: %v", ErrConfiguration, err)
+	}
+
+	if parsed.Scheme == "https" {
+		return nil
+	}
+
+	if parsed.Scheme == "http" {
+		switch parsed.Hostname() {
+		case "localhost", "127.0.0.1", "::1":
+			return nil
+		}
+	}
+
+	return fmt.Errorf("%w: Issuer must be https (got %s)", ErrConfiguration, issuer)
 }
