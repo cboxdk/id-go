@@ -60,7 +60,17 @@ type CboxUser struct {
 
 // CreateAuthorizationRequest begins login. Redirect the user to the returned URL and
 // persist State, CodeVerifier and Nonce for Authenticate.
+//
+// Panics if the client was built without a RedirectURI: the browser flow cannot be
+// started without one, and returning a URL missing redirect_uri would move the failure
+// to the authorization server, where the message is about a request the caller did not
+// knowingly make. This signature has no error to return; the constructor for a client
+// that needs no redirect URI is NewDeviceClient.
 func (c *Client) CreateAuthorizationRequest(params AuthParams) AuthorizationRequest {
+	if c.cfg.RedirectURI == "" {
+		panic("cboxid: RedirectURI is required for the authorization code flow — set it in Config, or use NewDeviceClient for a CLI")
+	}
+
 	verifier := oauth2.GenerateVerifier()
 	state := randToken()
 	nonce := randToken()

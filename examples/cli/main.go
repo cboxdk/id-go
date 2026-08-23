@@ -29,11 +29,12 @@ func main() {
 func run() error {
 	ctx := context.Background()
 
-	client, err := cboxid.New(ctx, cboxid.Config{
-		Issuer:      os.Getenv("CBOX_ID_ISSUER"),
-		ClientID:    os.Getenv("CBOX_ID_CLIENT_ID"),
-		RedirectURI: "http://localhost", // unused by the device flow, but required
-		Scopes:      []string{"openid", "profile", "email", "offline_access"},
+	client, err := cboxid.NewDeviceClient(ctx, cboxid.DeviceConfig{
+		Issuer:   os.Getenv("CBOX_ID_ISSUER"),
+		ClientID: os.Getenv("CBOX_ID_CLIENT_ID"),
+		// No secret and no redirect URI: register the app as "CLI or device" and the
+		// client id is the whole of what you are given.
+		Scopes: []string{"openid", "profile", "email", "offline_access"},
 	})
 	if err != nil {
 		return err

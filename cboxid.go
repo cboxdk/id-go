@@ -47,6 +47,44 @@ type Config struct {
 	Roles       []Role
 }
 
+// NewDeviceClient builds a Client for the device authorization grant (RFC 8628) — a
+// CLI, a CI job, a container, a TV: anything with no browser of its own.
+//
+// A separate constructor because the configuration genuinely differs rather than
+// overlaps. There is no redirect URI, and there is no client secret: a binary on
+// somebody's laptop cannot keep one, so a device client is registered public and holds
+// none. Naming those absences in a type is clearer than documenting them as fields to
+// leave empty.
+func NewDeviceClient(ctx context.Context, cfg DeviceConfig) (*Client, error) {
+	return New(ctx, Config{
+		Issuer:      cfg.Issuer,
+		ClientID:    cfg.ClientID,
+		Scopes:      cfg.Scopes,
+		HTTPClient:  cfg.HTTPClient,
+		AccountPath: cfg.AccountPath,
+	})
+}
+
+// DeviceConfig is the configuration a device-grant client actually has.
+type DeviceConfig struct {
+	// Issuer is the base URL of the Cbox ID instance, e.g. https://id.acme.com.
+	Issuer string
+	// ClientID is your registered OAuth client id. Register the app as "CLI or device"
+	// in the console and this is all it hands you — there is nothing to keep secret.
+	ClientID string
+	// Scopes requested at login. Defaults to openid, profile, email.
+	//
+	// These must be within what the app is REGISTERED for: a device request naming a
+	// scope outside that ceiling is refused with invalid_scope rather than quietly
+	// reduced, because no browser is in front of it to notice a smaller grant. Include
+	// offline_access if you want the session to outlive the first hour.
+	Scopes []string
+	// AccountPath is the instance's hosted account page. Defaults to /settings.
+	AccountPath string
+	// HTTPClient, when set, is used for all back-channel calls (else http.DefaultClient).
+	HTTPClient *http.Client
+}
+
 // Client is a Cbox ID client. Construct it with New and share it; it is safe for
 // concurrent use.
 type Client struct {
@@ -73,9 +111,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.ClientID == "" {
 		return nil, fmt.Errorf("%w: ClientID is required", ErrConfiguration)
 	}
-	if cfg.RedirectURI == "" {
-		return nil, fmt.Errorf("%w: RedirectURI is required", ErrConfiguration)
-	}
+	// NOT REQUIRED HERE. It is required by the flow that uses it, and the device grant
+	// does not: a CLI has no callback URL, which is the entire reason RFC 8628 exists.
+	// Demanding one at construction meant every CLI wrote
+	// `RedirectURI: "http://localhost", // unused` — a value that means nothing, sitting
+	// where a security-relevant one usually is, in the file the next person copies from.
+	// {@see NewDeviceClient}, and the check in CreateAuthorizationRequest.
 	if err := assertSecureIssuer(cfg.Issuer); err != nil {
 		return nil, err
 	}

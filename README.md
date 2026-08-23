@@ -60,8 +60,11 @@ one fails at startup rather than as a 500 that reads as an outage.
 ## Install
 
 > **Where do `issuer`, `clientId` and `redirectUri` come from?**
-> Register an application in your environment console — see
+> Register an app in your environment console — see
 > [Integrate your app](https://github.com/cboxdk/cbox-id/blob/main/docs/getting-started/integrate-your-app.md).
+> For a CLI, answer **"CLI or device"** and see
+> [Sign in from a CLI](https://github.com/cboxdk/cbox-id/blob/main/docs/getting-started/sign-in-from-a-cli.md);
+> it has no redirect URI and no secret.
 
 ```bash
 go get github.com/cboxdk/id-go
@@ -70,11 +73,10 @@ go get github.com/cboxdk/id-go
 ## CLI login (device flow)
 
 ```go
-client, _ := cboxid.New(ctx, cboxid.Config{
-    Issuer:      "https://id.acme.com",
-    ClientID:    "client_...",
-    RedirectURI: "http://localhost", // unused by the device flow, but required
-    Scopes:      []string{"openid", "profile", "email", "offline_access"},
+client, _ := cboxid.NewDeviceClient(ctx, cboxid.DeviceConfig{
+    Issuer:   "https://id.acme.com",
+    ClientID: "cid_...", // register the app as "CLI or device" — there is no secret
+    Scopes:   []string{"openid", "profile", "email", "offline_access"},
 })
 
 auth, _ := client.RequestDeviceAuthorization(ctx, cboxid.DeviceParams{})
@@ -85,6 +87,10 @@ user, err := client.PollDeviceToken(ctx, auth)
 fmt.Printf("Signed in as %s\n", user.Email)
 // Persist user.Token (with its refresh token) to your CLI config for next time.
 ```
+
+The scopes are bounded by what the app is REGISTERED for: a device request naming one
+outside that ceiling is refused with `invalid_scope` rather than quietly reduced, because
+there is no browser in front of it to notice a smaller grant.
 
 A complete, runnable example is in [`examples/cli`](examples/cli).
 
