@@ -135,8 +135,8 @@ _means_. Assigned roles then arrive in the token's claims for you to enforce. Re
 ```go
 client, _ := cboxid.New(ctx, cboxid.Config{
     Issuer:       "https://id.acme.com",
-    ClientID:     "client_...",
-    ClientSecret: "secret_...",
+    ClientID:     "cid_...",
+    ClientSecret: "csec_...",
     RedirectURI:  "http://localhost", // unused when only publishing, but required
     Permissions: []cboxid.Permission{
         {Key: "invoices:create", Description: "Create invoices"},
