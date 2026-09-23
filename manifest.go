@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf16"
@@ -21,19 +22,90 @@ const scopeAppsManifest = "apps.manifest"
 // Permission is one authorization permission the app declares. Key is a
 // "feature:action" slug (e.g. "invoices:create"); Description is human-facing copy
 // shown in the Cbox ID console.
+//
+// TenantAssignable marks a SELF-SERVE permission: one an organization's own admins may
+// grant their members in a custom role. It defaults to false — deny by default — because
+// a permission an app never thought about letting customers hand out should not become
+// hand-out-able by omission. Only an explicit true is sent (as "tenant_assignable").
 type Permission struct {
-	Key         string `json:"key"`
-	Description string `json:"description,omitempty"`
+	Key              string `json:"key"`
+	Description      string `json:"description,omitempty"`
+	TenantAssignable bool   `json:"tenant_assignable,omitempty"`
 }
 
 // Role is one authorization role the app declares. Permissions must reference keys
 // of declared Permissions. Cbox ID assigns roles to users and returns them in the
 // token's claims; the app decides what each role is allowed to do.
+//
+// StaffOnly marks a role only the app vendor's own staff may assign — a "support" role
+// that can impersonate, say. An organization's admins never see it in their role picker.
+// On the wire and in the checksum it is "tenant_assignable": false.
+//
+// The field is named for the exception rather than the rule on purpose. The server's
+// default for a role is tenant-assignable, and Go's zero value is false: a
+// TenantAssignable bool would have turned every Role literal written before this field
+// existed into a staff-only role, silently, the next time it was published. With
+// StaffOnly the zero value means what it always meant, and the checksum of an existing
+// catalog does not move.
 type Role struct {
+	Key         string
+	Name        string
+	Description string
+	Permissions []string
+	StaffOnly   bool
+}
+
+// roleWire is Role as Cbox ID's manifest endpoint reads it (ManifestParser.php).
+type roleWire struct {
 	Key         string   `json:"key"`
 	Name        string   `json:"name,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Permissions []string `json:"permissions"`
+	// Only ever false on the wire. The key is omitted for an ordinary role, which the
+	// server reads as tenant-assignable; a staff role that forgot it would be assignable
+	// by every customer's admin.
+	TenantAssignable *bool `json:"tenant_assignable,omitempty"`
+}
+
+// MarshalJSON writes the role as Cbox ID's manifest endpoint reads it, with a staff
+// role carrying "tenant_assignable": false.
+func (r Role) MarshalJSON() ([]byte, error) {
+	wire := roleWire{Key: r.Key, Name: r.Name, Description: r.Description, Permissions: r.Permissions}
+	if r.StaffOnly {
+		assignable := false
+		wire.TenantAssignable = &assignable
+	}
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON reads a role in the manifest wire shape. Like the server, it refuses a
+// "tenant_assignable" that is not a boolean rather than guessing which way it was meant.
+func (r *Role) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		roleWire
+		TenantAssignable json.RawMessage `json:"tenant_assignable"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+
+	staffOnly := false
+	if raw := bytes.TrimSpace(wire.TenantAssignable); len(raw) > 0 {
+		var assignable bool
+		if err := json.Unmarshal(raw, &assignable); err != nil {
+			return fmt.Errorf("cboxid: role %q tenant_assignable must be true or false", wire.Key)
+		}
+		staffOnly = !assignable
+	}
+
+	*r = Role{
+		Key:         wire.Key,
+		Name:        wire.Name,
+		Description: wire.Description,
+		Permissions: wire.Permissions,
+		StaffOnly:   staffOnly,
+	}
+	return nil
 }
 
 // Manifest is the app's declared authorization catalog as it is sent to Cbox ID:
@@ -87,26 +159,37 @@ func manifestVersion(permissions []Permission, roles []Role) string {
 
 // canonicalManifestJSON serializes {permissions, roles} exactly as the PHP reference's
 // json_encode does before hashing: object keys in insertion order, permissions and
-// roles sorted by key, each role's permission refs sorted, an absent-or-empty
-// description emitted as null, compact separators, forward slashes escaped as "\/",
-// and every non-ASCII rune escaped as "\uXXXX".
+// roles sorted by key, each role's permission refs sorted and de-duplicated, an
+// absent-or-empty description emitted as null, compact separators, forward slashes
+// escaped as "\/", and every non-ASCII rune escaped as "\uXXXX".
+//
+// "tenant_assignable" appears only where it departs from the default: true on a
+// self-serve permission, false on a staff role. So a catalog that uses neither hashes
+// exactly as it did before either existed.
 func canonicalManifestJSON(permissions []Permission, roles []Role) string {
 	type canonPermission struct {
-		Key         string  `json:"key"`
-		Description *string `json:"description"`
+		Key              string  `json:"key"`
+		Description      *string `json:"description"`
+		TenantAssignable *bool   `json:"tenant_assignable,omitempty"`
 	}
 	type canonRole struct {
-		Key         string   `json:"key"`
-		Name        string   `json:"name"`
-		Description *string  `json:"description"`
-		Permissions []string `json:"permissions"`
+		Key              string   `json:"key"`
+		Name             string   `json:"name"`
+		Description      *string  `json:"description"`
+		Permissions      []string `json:"permissions"`
+		TenantAssignable *bool    `json:"tenant_assignable,omitempty"`
 	}
+
+	assignable, staffOnly := true, false
 
 	sortedPermissions := append([]Permission(nil), permissions...)
 	sort.Slice(sortedPermissions, func(i, j int) bool { return sortedPermissions[i].Key < sortedPermissions[j].Key })
 	canonPermissions := make([]canonPermission, len(sortedPermissions))
 	for i, p := range sortedPermissions {
 		canonPermissions[i] = canonPermission{Key: p.Key, Description: emptyToNull(p.Description)}
+		if p.TenantAssignable {
+			canonPermissions[i].TenantAssignable = &assignable
+		}
 	}
 
 	sortedRoles := append([]Role(nil), roles...)
@@ -115,10 +198,17 @@ func canonicalManifestJSON(permissions []Permission, roles []Role) string {
 	for i, r := range sortedRoles {
 		perms := append([]string(nil), r.Permissions...)
 		sort.Strings(perms)
+		// The server's parser drops a repeated reference before it hashes, so a role
+		// that names one twice must hash as if it named it once — or every deploy of it
+		// looks like a change.
+		perms = slices.Compact(perms)
 		if perms == nil {
 			perms = []string{}
 		}
 		canonRoles[i] = canonRole{Key: r.Key, Name: r.Name, Description: emptyToNull(r.Description), Permissions: perms}
+		if r.StaffOnly {
+			canonRoles[i].TenantAssignable = &staffOnly
+		}
 	}
 
 	canonical := struct {
