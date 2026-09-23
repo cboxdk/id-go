@@ -2,6 +2,8 @@ package cboxid_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	cboxid "github.com/cboxdk/id-go"
@@ -40,11 +42,8 @@ func TestAuthorizationRequestStillRequiresRedirectURI(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	defer func() {
-		if recover() == nil {
-			t.Fatal("the browser flow must refuse a client that has no redirect URI")
-		}
-	}()
-
-	client.CreateAuthorizationRequest(cboxid.AuthParams{})
+	_, err = client.CreateAuthorizationRequest(cboxid.AuthParams{})
+	if !errors.Is(err, cboxid.ErrConfiguration) || !strings.Contains(err.Error(), "RedirectURI is required") {
+		t.Fatalf("the browser flow must refuse a client that has no redirect URI, got %v", err)
+	}
 }
