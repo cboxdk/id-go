@@ -45,15 +45,31 @@ type Stored struct {
 // CboxUser is the authenticated user. ID is the stable subject (sub) you key your
 // local account on. Claims is the full verified id_token + userinfo claim set.
 type CboxUser struct {
-	ID             string
-	Email          string
-	Name           string
+	ID    string
+	Email string
+	Name  string
+	// OrganizationID is the active organization's id (org). Same as Organization.ID.
 	OrganizationID string
-	Claims         map[string]any
-	AccessToken    string
-	RefreshToken   string
-	IDToken        string
-	Expiry         time.Time
+	// Organization is the organization this session is bound to — id, name and the
+	// person's membership tier in it (org, org_name, org_role) — or nil when none.
+	Organization *ActiveOrganization
+	// Roles are the app roles held in this session (roles); nil when there are none.
+	Roles []string
+	// Permissions are the permissions held in this session (permissions), already
+	// expanded from Roles by Cbox ID; nil when there are none.
+	Permissions []string
+	// Actor is the staff member driving this session when it is a support session (the
+	// RFC 8693 act claim); nil for an ordinary sign-in. See IsSupportSession.
+	Actor *Actor
+	// SessionID is the id_token's sid: the Cbox ID session this sign-in belongs to.
+	// Store it to match an OIDC back-channel logout token, which names the session by
+	// sid. Read from the signed id_token only, never from UserInfo; empty when absent.
+	SessionID    string
+	Claims       map[string]any
+	AccessToken  string
+	RefreshToken string
+	IDToken      string
+	Expiry       time.Time
 	// Token is the raw oauth2 token, e.g. for building an authenticated client.
 	Token *oauth2.Token
 }
@@ -205,6 +221,11 @@ func (c *Client) userFromToken(ctx context.Context, token *oauth2.Token, expecte
 		Email:          stringClaim(claims, "email"),
 		Name:           stringClaim(claims, "name"),
 		OrganizationID: stringClaim(claims, "org"),
+		Organization:   organizationFrom(claims),
+		Roles:          stringList(claims["roles"]),
+		Permissions:    stringList(claims["permissions"]),
+		Actor:          actorFrom(claims["act"], 0),
+		SessionID:      stringClaim(verified, "sid"),
 		Claims:         claims,
 		AccessToken:    token.AccessToken,
 		RefreshToken:   token.RefreshToken,
