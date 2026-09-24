@@ -34,7 +34,10 @@ var (
 	ErrServer = errors.New("cboxid: unusable response from Cbox ID")
 )
 
-// OAuthError is a token-endpoint failure with the server's own answer preserved.
+// OAuthError is an OAuth failure with the server's own answer preserved: a
+// token-endpoint error (RFC 6749 §5.2), or an error the authorization server sent back to
+// the callback (RFC 6749 §4.1.2.1, Op "authorization") — access_denied after a
+// SwitchOrganization, say, means the person is not a member of that organization.
 //
 // It wraps ErrAuthentication, so every existing errors.Is(err, ErrAuthentication) check
 // keeps working; what it adds is the detail those checks could not reach. The
@@ -44,9 +47,10 @@ var (
 // refresh means the session is over and the person must sign in again; a 429 means the
 // same request succeeds unchanged if you wait, and the server says how long.
 type OAuthError struct {
-	// Op is what was being attempted, e.g. "token refresh".
+	// Op is what was being attempted, e.g. "token refresh" or "authorization".
 	Op string
-	// Code is the RFC 6749 §5.2 error code, empty when the server sent none.
+	// Code is the RFC 6749 error code, e.g. "access_denied"; empty when the server sent
+	// none.
 	Code string
 	// Description is the server's error_description, verbatim. Not end-user copy.
 	Description string

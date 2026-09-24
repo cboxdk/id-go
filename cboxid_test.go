@@ -212,7 +212,10 @@ var stored = cboxid.Stored{State: "state-1", CodeVerifier: "verifier-verifier-ve
 
 func TestCreateAuthorizationRequest(t *testing.T) {
 	fake := newFakeInstance(t)
-	req := fake.client(t).CreateAuthorizationRequest(cboxid.AuthParams{})
+	req, err := fake.client(t).CreateAuthorizationRequest(cboxid.AuthParams{})
+	if err != nil {
+		t.Fatalf("create authorization request: %v", err)
+	}
 
 	parsed, err := url.Parse(req.URL)
 	if err != nil {
