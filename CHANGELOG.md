@@ -3,7 +3,7 @@
 All notable changes to `github.com/cboxdk/id-go` are recorded here. Earlier releases are
 described in their [GitHub releases](https://github.com/cboxdk/id-go/releases).
 
-## Unreleased
+## [0.12.0] - 2026-09-24
 
 Organization selection, support sessions, and staff roles in the manifest. Needs a Cbox ID
 instance that understands the `organization` / `organization_hint` authorize parameters,
