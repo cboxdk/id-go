@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [0.12.1] — prepared candidate, not published
+## [0.12.1] - 2026-11-07
 
 ### Changes
 
@@ -11,7 +11,6 @@ Add strict organization claims and request-bound live permission decisions.
 
 Existing exported call signatures are retained. Go minimum remains 1.25; go.mod suggests toolchain go1.26.10. This SDK has no management-plane member or invitation API; do not claim generated management parity.
 
-## Unreleased
 
 ### Added
 
