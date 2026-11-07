@@ -154,7 +154,10 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 			writeJSON(w, map[string]any{"error": "insufficient_scope"})
 			return
 		}
-		writeJSON(w, map[string]any{"unchanged": false, "roles_declared": 1, "permissions_declared": 1})
+		encoded, _ := json.Marshal(fake.manifestBody)
+		var manifest cboxid.Manifest
+		_ = json.Unmarshal(encoded, &manifest)
+		writeJSON(w, map[string]any{"client_id": clientID, "version": manifest.Version, "checksum": manifest.Checksum(), "unchanged": false, "roles_declared": len(manifest.Roles), "permissions_declared": len(manifest.Permissions)})
 	})
 
 	t.Cleanup(fake.server.Close)

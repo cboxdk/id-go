@@ -2,6 +2,8 @@ module github.com/cboxdk/id-go
 
 go 1.25.0
 
+toolchain go1.26.10
+
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/go-jose/go-jose/v4 v4.1.4

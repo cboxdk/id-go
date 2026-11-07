@@ -1,7 +1,27 @@
 # Changelog
 
-All notable changes to `github.com/cboxdk/id-go` are recorded here. Earlier releases are
-described in their [GitHub releases](https://github.com/cboxdk/id-go/releases).
+
+## [0.12.1] — prepared candidate, not published
+
+### Changes
+
+Add strict organization claims and request-bound live permission decisions.
+
+### Upgrade
+
+Existing exported call signatures are retained. Go minimum remains 1.25; go.mod suggests toolchain go1.26.10. This SDK has no management-plane member or invitation API; do not claim generated management parity.
+
+## Unreleased
+
+### Added
+
+- `Client.CheckPermissions` and bound permission decisions for current server authorization. Every call verifies the exact subject, organization and app, with a bounded response size, timeout, no redirects and no positive decision cache.
+- Permission and role manifest tenant-assignability flags, with canonical checksums shared with the other SDKs.
+
+### Changed
+
+- Manifest publication requires a complete acknowledgement for the submitted client, version and checksum, including valid publication counts. Definition publication does not assign access.
+- Development and release builds select the patched Go 1.26.10 toolchain. The supported minimum language version remains Go 1.25; consumers must select their own patched build toolchain.
 
 ## [0.12.0] - 2026-09-24
 

@@ -113,3 +113,32 @@ func TestManifestHashDeduplicatesRolePermissions(t *testing.T) {
 		t.Fatalf("a repeated permission reference changed the canonical form\n got: %s\nwant: %s", got, want)
 	}
 }
+
+func TestStaffRoleCompatibilityCannotWidenAssignment(t *testing.T) {
+	allowed, denied := true, false
+	for _, role := range []Role{
+		{Key: "support", StaffOnly: true},
+		{Key: "support", TenantAssignable: &denied},
+		{Key: "support", StaffOnly: true, TenantAssignable: &allowed},
+	} {
+		body, err := json.Marshal(role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(body, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire["tenant_assignable"] != false {
+			t.Fatalf("staff role widened: %s", body)
+		}
+		want := canonicalManifestJSON(nil, []Role{{Key: "support", StaffOnly: true}})
+		if got := canonicalManifestJSON(nil, []Role{role}); got != want {
+			t.Fatalf("staff role hash mismatch: %s", got)
+		}
+	}
+	var role Role
+	if err := json.Unmarshal([]byte(`{"key":"support","tenant_assignable":null}`), &role); err == nil {
+		t.Fatal("null assignability accepted")
+	}
+}

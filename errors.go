@@ -21,7 +21,7 @@ var (
 	ErrAuthentication = errors.New("cboxid: authentication failed")
 	// ErrManifestRejected indicates Cbox ID refused an authorization-manifest push —
 	// e.g. the client lacks the apps.manifest scope, or the manifest was malformed.
-	// The wrapped message carries the HTTP status and the server's response body.
+	// The wrapped message carries a safe status without credentials or response bodies.
 	ErrManifestRejected = errors.New("cboxid: manifest push rejected")
 	// ErrUnauthorized indicates the Frontend API refused this caller: the publishable
 	// key is unknown or revoked, or the calling origin is not on its allow-list. A

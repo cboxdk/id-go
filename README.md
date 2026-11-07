@@ -268,7 +268,7 @@ ok := cboxid.VerifyWebhook(rawBody, r.Header.Get("X-Cbox-Signature"), webhookSec
 
 Declare your app's authorization **roles** and **permissions** in code and push them to
 Cbox ID on deploy. Cbox ID owns identity and who holds what; your app owns what a role
-_means_. Assigned roles then arrive in the token's claims for you to enforce. Requires a
+_means_. Publishing synchronizes definitions only; assigning app roles remains an explicit administrative action. Use a live decision for each protected request, since token claims can outlive a revoked assignment. Publishing requires a
 `ClientSecret` and a client that holds the `apps.manifest` scope.
 
 ```go
@@ -315,6 +315,29 @@ the manifest to `{issuer}/api/v1/apps/manifest`. A rejected push wraps
 client's `php artisan cbox-id:publish-manifest`, so the manifest contract is identical
 across SDKs.
 
+Permissions default to non-assignable by tenants; set `Permission.TenantAssignable: true` only for a permission tenants may grant. Roles default to tenant-assignable. Prefer the public `Role.StaffOnly: true` flag for staff roles; `Role.TenantAssignable` also accepts an explicit pointer to false. Either restriction wins if both fields are supplied. Both the wire manifest and canonical checksum preserve these boundaries; the shared cross-SDK fixtures cover explicit false and true.
+
+## Live permission decisions
+
+Resolve the current authenticated subject and the organization bound to the route or validated request context before calling `CheckPermissions`. Do not substitute another active organization or trust a browser-provided subject.
+
+```go
+organization := requestOrganizationID
+result, err := client.CheckPermissions(ctx, accessToken, authenticatedSubject, &organization,
+    []string{"invoices:read"})
+if err != nil || !result.Allows("invoices:read") {
+    // Deny this request. An ID outage never restores previous access.
+    return
+}
+// Also enforce the invoice's organization and this person's row-level policy here.
+```
+
+Every call posts to `/oauth/decisions` with the token and exact subject/organization. The response must bind the same subject, organization and configured client, contain exactly the requested permission results, and report consistent active membership. Shared organization Admin alone grants no app permission. `Allows` denies unknown permissions; `Allowed` requires every requested permission and active membership. A nil organization explicitly requests an unbound decision; it is never a fallback for an organization-bound resource.
+
+Decisions have no positive cache. Recheck inside queued human work immediately before execution and before delivering protected notifications. A successful decision does not replace service admission, Billing entitlements or app row-level checks. Never serialize a prior decision as authority for a job.
+
+Both decision and manifest HTTP requests reject redirects, bound response bodies to 64 KiB and have a ten-second timeout. Errors omit tokens and upstream response bodies. A manifest publication succeeds only when the response acknowledges this client, the submitted version and full canonical SHA-256 checksum; changed catalogs must acknowledge complete role/permission counts. Treat failure as a failed release step. `Manifest.Checksum()` exposes that full checksum, and the server-bound fields are available on `Summary`.
+
 ## Errors
 
 Errors wrap the sentinels `cboxid.ErrInvalidState`, `cboxid.ErrAuthentication` and
@@ -342,3 +365,7 @@ Report vulnerabilities via this repo's GitHub **Private Vulnerability Reporting*
 ## License
 
 MIT © Cbox.
+
+## Build verification
+
+The module supports Go 1.25 and newer. Use a patched toolchain; this checkout selects Go 1.26.10 to include the current TLS, HTTP and certificate-validation fixes. CI tests supported minor lines at their latest patch. Run `go vet ./...`, `go build ./...`, `go test -race ./...` and `govulncheck ./...` before release.

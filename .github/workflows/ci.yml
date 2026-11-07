@@ -8,6 +8,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Exercise the selected supported minor, rather than auto-switching to go.mod's development toolchain.
+      GOTOOLCHAIN: local
     strategy:
       matrix:
         go: ['1.25', '1.26']

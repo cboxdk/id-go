@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -97,6 +98,80 @@ func TestPublishManifestRequiresDeclaredCatalog(t *testing.T) {
 	_, err := fake.client(t).PublishManifest(context.Background())
 	if !errors.Is(err, cboxid.ErrConfiguration) {
 		t.Fatalf("want ErrConfiguration, got %v", err)
+	}
+}
+
+func TestPublishManifestRequiresBoundCompleteAcknowledgement(t *testing.T) {
+	changes := map[string]func(map[string]any){
+		"unbound":                  func(d map[string]any) { delete(d, "client_id") },
+		"other client":             func(d map[string]any) { d["client_id"] = "other" },
+		"other version":            func(d map[string]any) { d["version"] = "old" },
+		"truncated checksum":       func(d map[string]any) { d["checksum"] = d["version"] },
+		"missing unchanged":        func(d map[string]any) { delete(d, "unchanged") },
+		"null count":               func(d map[string]any) { d["roles_declared"] = nil },
+		"string count":             func(d map[string]any) { d["permissions_declared"] = "1" },
+		"incomplete":               func(d map[string]any) { d["roles_declared"] = 0 },
+		"negative unchanged count": func(d map[string]any) { d["unchanged"] = true; d["roles_declared"] = -1 },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			client := authorizationClient(t, func(r *http.Request) (*http.Response, error) {
+				var manifest cboxid.Manifest
+				if json.NewDecoder(r.Body).Decode(&manifest) != nil {
+					t.Fatal("invalid manifest")
+				}
+				ack := map[string]any{"client_id": clientID, "version": manifest.Version, "checksum": manifest.Checksum(), "unchanged": false, "roles_declared": 1, "permissions_declared": 1}
+				change(ack)
+				return authorizationResponse(r, 200, ack), nil
+			})
+			_, err := client.PublishManifest(context.Background())
+			if !errors.Is(err, cboxid.ErrManifestRejected) {
+				t.Fatalf("accepted invalid acknowledgment: %v", err)
+			}
+		})
+	}
+}
+
+func TestPublishManifestAcceptsBoundUnchangedAcknowledgement(t *testing.T) {
+	client := authorizationClient(t, func(r *http.Request) (*http.Response, error) {
+		var manifest cboxid.Manifest
+		_ = json.NewDecoder(r.Body).Decode(&manifest)
+		return authorizationResponse(r, 200, map[string]any{"client_id": clientID, "version": manifest.Version, "checksum": manifest.Checksum(), "unchanged": true, "roles_declared": 0, "permissions_declared": 0}), nil
+	})
+	result, err := client.PublishManifest(context.Background())
+	if err != nil || !result.Unchanged || len(result.Checksum) != 64 {
+		t.Fatalf("unchanged acknowledgment: %+v %v", result, err)
+	}
+}
+
+func TestPublishManifestDoesNotFollowRedirectOrExposeFailureBodies(t *testing.T) {
+	calls := 0
+	client := authorizationClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		response := authorizationResponse(r, 302, map[string]any{"secret": "do-not-expose"})
+		response.Header.Set("Location", "/credential-trap")
+		return response, nil
+	})
+	_, err := client.PublishManifest(context.Background())
+	if !errors.Is(err, cboxid.ErrManifestRejected) || strings.Contains(err.Error(), "do-not-expose") || calls != 1 {
+		t.Fatalf("unsafe failure: %v (%d calls)", err, calls)
+	}
+}
+
+func TestPublishManifestPreservesStaffOnlyRolesAndTenantPermissions(t *testing.T) {
+	fake := newFakeInstance(t)
+	staffOnly := false
+	client, err := cboxid.New(context.Background(), cboxid.Config{Issuer: fake.server.URL, ClientID: clientID, ClientSecret: "fixture-secret", Permissions: []cboxid.Permission{{Key: "work:read", TenantAssignable: true}}, Roles: []cboxid.Role{{Key: "staff", Name: "Staff", Permissions: []string{"work:read"}, TenantAssignable: &staffOnly}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.PublishManifest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	permission := fake.manifestBody["permissions"].([]any)[0].(map[string]any)
+	role := fake.manifestBody["roles"].([]any)[0].(map[string]any)
+	if permission["tenant_assignable"] != true || role["tenant_assignable"] != false {
+		t.Fatalf("assignment boundary lost: %+v", fake.manifestBody)
 	}
 }
 

@@ -1,0 +1,9 @@
+{
+  "upstream_head": "2caabceb80f07453985ff8395476cb16424416cf",
+  "upstream_branch": "main",
+  "target_version": "0.12.1",
+  "status": "unpublished candidate based on actual upstream history",
+  "source_manifest": "evidence/id-go-final-source-hashes.json",
+  "publication_parent": "34bbfa386b481cbe1b92e4f7c06b29ad7483fe7b",
+  "restored_public_files": []
+}

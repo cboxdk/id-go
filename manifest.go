@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf16"
 )
 
@@ -35,7 +36,7 @@ type Permission struct {
 
 // Role is one authorization role the app declares. Permissions must reference keys
 // of declared Permissions. Cbox ID assigns roles to users and returns them in the
-// token's claims; the app decides what each role is allowed to do.
+// catalog. CheckPermissions resolves current assignments for each protected request.
 //
 // StaffOnly marks a role only the app vendor's own staff may assign — a "support" role
 // that can impersonate, say. An organization's admins never see it in their role picker.
@@ -53,6 +54,9 @@ type Role struct {
 	Description string
 	Permissions []string
 	StaffOnly   bool
+	// TenantAssignable is the explicit wire-compatible alternative to StaffOnly.
+	// Either StaffOnly=true or TenantAssignable=false restricts assignment.
+	TenantAssignable *bool
 }
 
 // roleWire is Role as Cbox ID's manifest endpoint reads it (ManifestParser.php).
@@ -71,7 +75,7 @@ type roleWire struct {
 // role carrying "tenant_assignable": false.
 func (r Role) MarshalJSON() ([]byte, error) {
 	wire := roleWire{Key: r.Key, Name: r.Name, Description: r.Description, Permissions: r.Permissions}
-	if r.StaffOnly {
+	if r.StaffOnly || (r.TenantAssignable != nil && !*r.TenantAssignable) {
 		assignable := false
 		wire.TenantAssignable = &assignable
 	}
@@ -92,6 +96,9 @@ func (r *Role) UnmarshalJSON(data []byte) error {
 	staffOnly := false
 	if raw := bytes.TrimSpace(wire.TenantAssignable); len(raw) > 0 {
 		var assignable bool
+		if string(raw) != "true" && string(raw) != "false" {
+			return fmt.Errorf("cboxid: role %q tenant_assignable must be true or false", wire.Key)
+		}
 		if err := json.Unmarshal(raw, &assignable); err != nil {
 			return fmt.Errorf("cboxid: role %q tenant_assignable must be true or false", wire.Key)
 		}
@@ -122,6 +129,9 @@ type Manifest struct {
 // pushed catalog matched what was already synced. Orphaned* list keys the app once
 // declared but dropped — Cbox ID keeps and flags them rather than deleting them.
 type Summary struct {
+	ClientID            string   `json:"client_id"`
+	Version             string   `json:"version"`
+	Checksum            string   `json:"checksum"`
 	Unchanged           bool     `json:"unchanged"`
 	RolesDeclared       int      `json:"roles_declared"`
 	PermissionsDeclared int      `json:"permissions_declared"`
@@ -146,6 +156,12 @@ func (c *Client) Manifest() Manifest {
 	body := Manifest{Permissions: permissions, Roles: roles}
 	body.Version = manifestVersion(permissions, roles)
 	return body
+}
+
+// Checksum is the full canonical SHA-256 acknowledged by the manifest endpoint.
+func (m Manifest) Checksum() string {
+	sum := sha256.Sum256([]byte(canonicalManifestJSON(m.Permissions, m.Roles)))
+	return hex.EncodeToString(sum[:])
 }
 
 // manifestVersion derives a stable content hash from the declared catalog. It is
@@ -206,7 +222,7 @@ func canonicalManifestJSON(permissions []Permission, roles []Role) string {
 			perms = []string{}
 		}
 		canonRoles[i] = canonRole{Key: r.Key, Name: r.Name, Description: emptyToNull(r.Description), Permissions: perms}
-		if r.StaffOnly {
+		if r.StaffOnly || (r.TenantAssignable != nil && !*r.TenantAssignable) {
 			canonRoles[i].TenantAssignable = &staffOnly
 		}
 	}
@@ -264,6 +280,8 @@ func escapeLikePHP(raw []byte) string {
 // ErrConfiguration when nothing is declared or credentials are missing, and wraps
 // ErrManifestRejected when Cbox ID refuses the push.
 func (c *Client) PublishManifest(ctx context.Context) (Summary, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	if c.cfg.ClientSecret == "" {
 		return Summary{}, fmt.Errorf("%w: PublishManifest requires a ClientSecret", ErrConfiguration)
 	}
@@ -273,9 +291,11 @@ func (c *Client) PublishManifest(ctx context.Context) (Summary, error) {
 		return Summary{}, fmt.Errorf("%w: no roles or permissions declared to publish", ErrConfiguration)
 	}
 
-	token, err := c.MachineToken(ctx, MachineTokenParams{Scopes: []string{scopeAppsManifest}})
+	machineClient := *c
+	machineClient.cfg.HTTPClient = c.authorizationHTTPClient()
+	token, err := machineClient.MachineToken(ctx, MachineTokenParams{Scopes: []string{scopeAppsManifest}})
 	if err != nil {
-		return Summary{}, err
+		return Summary{}, fmt.Errorf("%w: machine token could not be obtained", ErrManifestRejected)
 	}
 
 	body, err := json.Marshal(manifest)
@@ -292,24 +312,28 @@ func (c *Client) PublishManifest(ctx context.Context) (Summary, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	httpClient := c.cfg.HTTPClient
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
+	httpClient := c.authorizationHTTPClient()
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return Summary{}, fmt.Errorf("%w: manifest request failed: %v", ErrManifestRejected, err)
+		return Summary{}, fmt.Errorf("%w: manifest request failed", ErrManifestRejected)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return Summary{}, fmt.Errorf("%w: HTTP %d %s", ErrManifestRejected, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	if resp.StatusCode != http.StatusOK {
+		return Summary{}, fmt.Errorf("%w: HTTP %d", ErrManifestRejected, resp.StatusCode)
 	}
-
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
+	if err != nil || len(raw) > 65536 {
+		return Summary{}, fmt.Errorf("%w: invalid sync summary", ErrManifestRejected)
+	}
 	var summary Summary
-	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
-		return Summary{}, fmt.Errorf("%w: could not parse the sync summary: %v", ErrManifestRejected, err)
+	var required struct {
+		Unchanged   *bool `json:"unchanged"`
+		Roles       *int  `json:"roles_declared"`
+		Permissions *int  `json:"permissions_declared"`
+	}
+	if json.Unmarshal(raw, &summary) != nil || json.Unmarshal(raw, &required) != nil || required.Unchanged == nil || required.Roles == nil || required.Permissions == nil || summary.ClientID != c.cfg.ClientID || summary.Version != manifest.Version || summary.Checksum != manifest.Checksum() || summary.RolesDeclared < 0 || summary.PermissionsDeclared < 0 || (!summary.Unchanged && (summary.RolesDeclared != len(manifest.Roles) || summary.PermissionsDeclared != len(manifest.Permissions))) {
+		return Summary{}, fmt.Errorf("%w: server did not acknowledge this app and complete manifest", ErrManifestRejected)
 	}
 	return summary, nil
 }
