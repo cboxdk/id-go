@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [Unreleased]
+## [0.12.2] - 2026-11-11
 
 Cbox ID v3 support, strictly additive: a client that sets nothing new behaves exactly as
 before.
