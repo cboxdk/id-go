@@ -1,6 +1,30 @@
 # Changelog
 
 
+## [Unreleased]
+
+Cbox ID v3 support, strictly additive: a client that sets nothing new behaves exactly as
+before.
+
+### Added
+
+- `Config.APIURL`: send the SDK's API calls to Cbox ID's `/v1` API (for Cbox's own
+  deployment `https://api.cboxid.com`, with or without `/v1`). `PublishManifest` then posts
+  to `{APIURL}/v1/app-manifests`, and a refused push carries the RFC 9457 problem's `error`
+  code. Empty (the default) keeps `{issuer}/api/v1/apps/manifest`. The URL must be https
+  (loopback http aside).
+- `RawID`, `IsPublicID` and `SameID` for Cbox ID's prefixed public ids (`org_01J9Z…`) next
+  to the raw ids token claims keep.
+- `CurrentEventType`, `LegacyEventType`, `SameEventType` and `EventTypePrefix` for the
+  `id.*` webhook event names (`user.login` is `id.user.signed_in`).
+
+### Changed
+
+- `Authenticate` accepts a `Stored.Organization` in either spelling (prefixed or raw) for
+  the token's raw `org` claim, and `CheckPermissions` accepts the subject and organization
+  in either spelling. Ids that are not `<prefix>_<ULID>` are still compared exactly.
+
+
 ## [0.12.1] - 2026-11-07
 
 ### Changes
