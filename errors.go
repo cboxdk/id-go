@@ -1,8 +1,10 @@
 package cboxid
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -103,4 +105,28 @@ func asOAuthError(op string, err error) error {
 	}
 
 	return out
+}
+
+// problemCode reads the machine code ("error") of an RFC 9457 problem response, or ""
+// when the response is not one. Only a short token is returned: never the detail, which
+// may echo request content.
+func problemCode(resp *http.Response) string {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))), "application/problem+json") {
+		return ""
+	}
+	var problem struct {
+		Error string `json:"error"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(&problem) != nil {
+		return ""
+	}
+	for _, r := range problem.Error {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
+			return ""
+		}
+	}
+	if len(problem.Error) > 64 {
+		return ""
+	}
+	return problem.Error
 }

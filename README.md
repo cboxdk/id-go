@@ -264,6 +264,39 @@ everywhere" needs. Both calls are confidential-client, so they require a `Client
 ok := cboxid.VerifyWebhook(rawBody, r.Header.Get("X-Cbox-Signature"), webhookSecret, 300)
 ```
 
+Cbox ID is adding its product key to event types: `organization.member_added` becomes
+`id.organization.member_added`, and `user.login` becomes `id.user.signed_in`. For a while a
+delivery may carry either name, so match types with `cboxid.SameEventType` instead of `==`:
+
+```go
+if cboxid.SameEventType(event.Type, "organization.member_added") {
+    // runs for organization.member_added and id.organization.member_added
+}
+```
+
+`cboxid.CurrentEventType` and `cboxid.LegacyEventType` give the other name of a type.
+
+## Cbox ID's /v1 API
+
+Cbox ID serves its management API at `https://api.cboxid.com/v1`. Its old home,
+`{issuer}/api/v1`, keeps answering for now. Set `Config.APIURL` to move this SDK's API
+calls there; leave it empty and nothing changes:
+
+```go
+client, _ := cboxid.New(ctx, cboxid.Config{
+    Issuer: "https://id.acme.com",
+    APIURL: "https://api.cboxid.com", // with or without /v1
+    // …
+})
+```
+
+Sign-in, tokens, `/.well-known/*` and the Frontend API stay on the issuer either way.
+
+**Ids.** The API and webhooks are moving to prefixed public ids (`org_01J9Z…`), while token
+claims (`sub`, `org`) keep the raw id (`01j9z…`). Compare ids with `cboxid.SameID`, and
+use `cboxid.RawID` to get the form a token carries. `Stored.Organization` and
+`CheckPermissions` take either form.
+
 ## Declare roles & permissions, publish a manifest
 
 Declare your app's authorization **roles** and **permissions** in code and push them to
@@ -309,7 +342,8 @@ Neither key is sent at its default, so a catalog that uses neither pushes, and h
 exactly as it did before they existed.
 
 `PublishManifest` mints a client-credentials token scoped to `apps.manifest`, then POSTs
-the manifest to `{issuer}/api/v1/apps/manifest`. A rejected push wraps
+the manifest to `{issuer}/api/v1/apps/manifest`, or to `{APIURL}/v1/app-manifests` when
+`Config.APIURL` is set (see [Cbox ID's /v1 API](#cbox-ids-v1-api)). A rejected push wraps
 `cboxid.ErrManifestRejected`. A complete example is in
 [`examples/publish-manifest`](examples/publish-manifest). This mirrors the Laravel
 client's `php artisan cbox-id:publish-manifest`, so the manifest contract is identical

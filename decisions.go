@@ -110,7 +110,7 @@ func (c *Client) CheckPermissions(ctx context.Context, accessToken, subject stri
 			Allowed    *bool  `json:"allowed"`
 		} `json:"results"`
 	}
-	if json.Unmarshal(raw, &data) != nil || data.Mode != "rbac" || data.Subject == nil || data.Subject.Type != "user" || data.Subject.ID != subject || data.ClientID != c.cfg.ClientID || len(data.Organization) == 0 || len(data.Role) == 0 || data.Active == nil || data.Allowed == nil || data.Results == nil || len(*data.Results) != len(unique) {
+	if json.Unmarshal(raw, &data) != nil || data.Mode != "rbac" || data.Subject == nil || data.Subject.Type != "user" || !SameID(data.Subject.ID, subject) || data.ClientID != c.cfg.ClientID || len(data.Organization) == 0 || len(data.Role) == 0 || data.Active == nil || data.Allowed == nil || data.Results == nil || len(*data.Results) != len(unique) {
 		return failure()
 	}
 	var org, role *string
@@ -137,8 +137,10 @@ func (c *Client) CheckPermissions(ctx context.Context, accessToken, subject stri
 	return decision, nil
 }
 
+// equalOptionalString compares two optional ids. Both absent match; a prefixed public id
+// (org_01J9Z…) matches its raw form, since the caller may hold either spelling.
 func equalOptionalString(a, b *string) bool {
-	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+	return (a == nil && b == nil) || (a != nil && b != nil && (*a == *b || SameID(*a, *b)))
 }
 
 // Authorization transports are bounded and never redirect credentials. Clone the

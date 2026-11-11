@@ -40,6 +40,11 @@ type fakeInstance struct {
 	manifestBody   map[string]any
 	manifestStatus int // response status for the manifest endpoint; 0 => 200
 
+	// The same for /v1/app-manifests, the /v1 API's manifest endpoint.
+	v1ManifestAuth     string
+	v1ManifestStatus   int
+	v1ManifestClientID string // the acknowledged client_id; "" => clientID
+
 	// tokenHandler, when set, answers /token instead of the default success path — so a
 	// test can assert what the SDK makes of an RFC 6749 §5.2 error body and its headers.
 	tokenHandler http.HandlerFunc
@@ -158,6 +163,23 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 		var manifest cboxid.Manifest
 		_ = json.Unmarshal(encoded, &manifest)
 		writeJSON(w, map[string]any{"client_id": clientID, "version": manifest.Version, "checksum": manifest.Checksum(), "unchanged": false, "roles_declared": len(manifest.Roles), "permissions_declared": len(manifest.Permissions)})
+	})
+
+	mux.HandleFunc("/v1/app-manifests", func(w http.ResponseWriter, r *http.Request) {
+		fake.v1ManifestAuth = r.Header.Get("Authorization")
+		var manifest cboxid.Manifest
+		_ = json.NewDecoder(r.Body).Decode(&manifest)
+		if fake.v1ManifestStatus != 0 {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.WriteHeader(fake.v1ManifestStatus)
+			_ = json.NewEncoder(w).Encode(map[string]any{"type": "https://api.cboxid.com/problems/insufficient_scope", "title": "Forbidden", "status": fake.v1ManifestStatus, "detail": "do-not-expose", "error": "insufficient_scope"})
+			return
+		}
+		acknowledged := fake.v1ManifestClientID
+		if acknowledged == "" {
+			acknowledged = clientID
+		}
+		writeJSON(w, map[string]any{"client_id": acknowledged, "version": manifest.Version, "checksum": manifest.Checksum(), "unchanged": false, "roles_declared": len(manifest.Roles), "permissions_declared": len(manifest.Permissions)})
 	})
 
 	t.Cleanup(fake.server.Close)

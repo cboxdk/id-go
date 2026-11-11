@@ -39,6 +39,13 @@ type Config struct {
 	AccountPath string
 	// HTTPClient, when set, is used for all back-channel calls (else http.DefaultClient).
 	HTTPClient *http.Client
+	// APIURL is Cbox ID's management API, e.g. https://api.cboxid.com (with or without
+	// its /v1). Leave it empty and nothing changes: the SDK's API calls go to
+	// {Issuer}/api/v1 with today's paths. Set it and they go to {APIURL}/v1 with the /v1
+	// paths, and Cbox ID works out the environment from the credential. The protocol
+	// endpoints (/oauth/*, /.well-known/*, the Frontend API) stay on the Issuer either way.
+	// Today this moves PublishManifest.
+	APIURL string
 	// Permissions and Roles declare this app's authorization catalog in code, for
 	// PublishManifest to push to Cbox ID on deploy. Cbox ID owns identity and who
 	// holds what; the app owns what a role means. Leave empty if you don't publish a
@@ -120,6 +127,14 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err := assertSecureIssuer(cfg.Issuer); err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(cfg.APIURL) != "" {
+		if err := assertSecureURL("APIURL", strings.TrimSpace(cfg.APIURL)); err != nil {
+			return nil, err
+		}
+		if parsed, _ := url.Parse(strings.TrimSpace(cfg.APIURL)); parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, fmt.Errorf("%w: APIURL must be an origin such as https://api.cboxid.com (got %s)", ErrConfiguration, cfg.APIURL)
+		}
+	}
 
 	provider, err := oidc.NewProvider(withClient(ctx, cfg.HTTPClient), strings.TrimRight(cfg.Issuer, "/"))
 	if err != nil {
@@ -177,9 +192,15 @@ func withClient(ctx context.Context, httpClient *http.Client) context.Context {
 // Loopback stays allowed: a native app's own callback listener is loopback by
 // definition (RFC 8252), and a development instance runs there.
 func assertSecureIssuer(issuer string) error {
-	parsed, err := url.Parse(issuer)
+	return assertSecureURL("Issuer", issuer)
+}
+
+// assertSecureURL refuses a base URL that is not HTTPS (loopback http aside), for the
+// same reason as the issuer: every call to it carries a bearer token.
+func assertSecureURL(name, raw string) error {
+	parsed, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%w: Issuer is not a valid URL: %v", ErrConfiguration, err)
+		return fmt.Errorf("%w: %s is not a valid URL: %v", ErrConfiguration, name, err)
 	}
 
 	if parsed.Scheme == "https" {
@@ -193,5 +214,5 @@ func assertSecureIssuer(issuer string) error {
 		}
 	}
 
-	return fmt.Errorf("%w: Issuer must be https (got %s)", ErrConfiguration, issuer)
+	return fmt.Errorf("%w: %s must be https (got %s)", ErrConfiguration, name, raw)
 }

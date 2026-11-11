@@ -285,7 +285,9 @@ func (c *Client) Authenticate(ctx context.Context, cb Callback, stored Stored) (
 		return nil, err
 	}
 
-	if stored.Organization != "" && user.OrganizationID != stored.Organization {
+	// SameID, not ==: the app may have bound the sign-in with a prefixed public id
+	// (org_01J9Z…, from the /v1 API) while the org claim carries the raw id.
+	if stored.Organization != "" && !SameID(user.OrganizationID, stored.Organization) {
 		current := user.OrganizationID
 		if current == "" {
 			current = "no organization"

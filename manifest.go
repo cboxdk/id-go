@@ -303,7 +303,7 @@ func (c *Client) PublishManifest(ctx context.Context) (Summary, error) {
 		return Summary{}, fmt.Errorf("%w: could not encode the manifest: %v", ErrConfiguration, err)
 	}
 
-	endpoint := strings.TrimRight(c.cfg.Issuer, "/") + "/api/v1/apps/manifest"
+	endpoint, v1 := c.apiEndpoint("/app-manifests", "/apps/manifest")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return Summary{}, fmt.Errorf("%w: %v", ErrManifestRejected, err)
@@ -320,6 +320,13 @@ func (c *Client) PublishManifest(ctx context.Context) (Summary, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if v1 {
+			// The /v1 API answers an RFC 9457 problem; its error code is a stable
+			// machine code, safe to surface (the rest of the body is not).
+			if code := problemCode(resp); code != "" {
+				return Summary{}, fmt.Errorf("%w: HTTP %d: %s", ErrManifestRejected, resp.StatusCode, code)
+			}
+		}
 		return Summary{}, fmt.Errorf("%w: HTTP %d", ErrManifestRejected, resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
@@ -332,8 +339,18 @@ func (c *Client) PublishManifest(ctx context.Context) (Summary, error) {
 		Roles       *int  `json:"roles_declared"`
 		Permissions *int  `json:"permissions_declared"`
 	}
-	if json.Unmarshal(raw, &summary) != nil || json.Unmarshal(raw, &required) != nil || required.Unchanged == nil || required.Roles == nil || required.Permissions == nil || summary.ClientID != c.cfg.ClientID || summary.Version != manifest.Version || summary.Checksum != manifest.Checksum() || summary.RolesDeclared < 0 || summary.PermissionsDeclared < 0 || (!summary.Unchanged && (summary.RolesDeclared != len(manifest.Roles) || summary.PermissionsDeclared != len(manifest.Permissions))) {
+	if json.Unmarshal(raw, &summary) != nil || json.Unmarshal(raw, &required) != nil || required.Unchanged == nil || required.Roles == nil || required.Permissions == nil || !manifestClientMatches(summary.ClientID, c.cfg.ClientID, v1) || summary.Version != manifest.Version || summary.Checksum != manifest.Checksum() || summary.RolesDeclared < 0 || summary.PermissionsDeclared < 0 || (!summary.Unchanged && (summary.RolesDeclared != len(manifest.Roles) || summary.PermissionsDeclared != len(manifest.Permissions))) {
 		return Summary{}, fmt.Errorf("%w: server did not acknowledge this app and complete manifest", ErrManifestRejected)
 	}
 	return summary, nil
+}
+
+// manifestClientMatches compares the acknowledged client id with this client's. On the
+// /v1 API the id may come back in its other spelling (prefixed or raw); on {issuer}/api/v1
+// it must match exactly, as it always has.
+func manifestClientMatches(acknowledged, configured string, v1 bool) bool {
+	if v1 {
+		return SameID(acknowledged, configured)
+	}
+	return acknowledged == configured
 }
